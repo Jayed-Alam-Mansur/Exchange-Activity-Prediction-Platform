@@ -1,0 +1,7 @@
+programme,product,direction,APP,ACH,ACC,APD,RE,FI,CO,mc_share_pct,app_to_re_pct,peak_month,growth_pct
+oGV,GV,outgoing,30879,13599,9343,7506,5591,5304,4822,51.21,18.11,Dec,78.9
+iGV,GV,incoming,10693,4347,2784,2097,1480,1333,1125,17.73,13.84,Jun,93.1
+oGTa,GTa,outgoing,10477,5124,3893,3483,2913,2805,2707,17.37,27.8,Dec,97.2
+iGTa,GTa,incoming,3628,1587,1171,1002,792,765,725,6.02,21.83,Jun,91.0
+oGTe,GTe,outgoing,3487,1569,1112,939,752,731,705,5.78,21.57,Dec,83.6
+iGTe,GTe,incoming,1138,497,304,240,182,171,152,1.89,15.99,Jul,56.9

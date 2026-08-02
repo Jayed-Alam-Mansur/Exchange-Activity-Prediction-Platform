@@ -1,0 +1,5 @@
+year,total_applications,avg_monthly_applications,peak_month_applications,min_month_applications,std_monthly_applications,months_observed,total_realizations,app_to_re_pct,yoy_growth_pct,peak_month
+2022,9854,821.17,1066,672,127.49,12,1715,17.4,,Dec
+2023,15036,1253.0,1707,896,220.31,12,2742,18.24,52.59,Dec
+2024,17183,1431.92,1976,1072,255.71,12,3394,19.75,14.28,Dec
+2025,18229,1519.08,1950,1138,249.04,12,3859,21.17,6.09,Dec

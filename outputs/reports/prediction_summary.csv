@@ -1,0 +1,2 @@
+forecast_year,model,total_predicted_applications,peak_month,peak_value,trough_month,high_activity_months,method,low_threshold,high_threshold,low_quantile,high_quantile
+2026,ridge,18655,Dec 2026,1989,Feb 2026,"May 2026, Jun 2026, Dec 2026",trend_adjusted,0.8763214216226732,1.1171471421429762,0.25,0.75

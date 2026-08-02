@@ -1,0 +1,13 @@
+Month,Predicted Applications,Activity Level,date,month_number,lower_95,upper_95,activity_level_vs_history,activity_level_within_2026,model,rank_in_year,share_of_year_pct
+Jan 2026,1682,Medium,2026-01-01,1,1411,1826,High,Medium,ridge,4,9.02
+Feb 2026,1175,Low,2026-02-01,2,792,1379,Medium,Low,ridge,12,6.3
+Mar 2026,1330,Low,2026-03-01,3,860,1579,Medium,Low,ridge,11,7.13
+Apr 2026,1437,Medium,2026-04-01,4,895,1725,Medium,Medium,ridge,8,7.7
+May 2026,1741,High,2026-05-01,5,1135,2063,High,High,ridge,3,9.33
+Jun 2026,1814,High,2026-06-01,6,1151,2167,High,High,ridge,2,9.72
+Jul 2026,1556,Medium,2026-07-01,7,839,1936,High,Medium,ridge,6,8.34
+Aug 2026,1386,Medium,2026-08-01,8,620,1793,Medium,Low,ridge,10,7.43
+Sep 2026,1398,Medium,2026-09-01,9,586,1830,Medium,Medium,ridge,9,7.49
+Oct 2026,1541,Medium,2026-10-01,10,685,1997,High,Medium,ridge,7,8.26
+Nov 2026,1606,Medium,2026-11-01,11,708,2084,High,Medium,ridge,5,8.61
+Dec 2026,1989,High,2026-12-01,12,1051,2488,High,High,ridge,1,10.66

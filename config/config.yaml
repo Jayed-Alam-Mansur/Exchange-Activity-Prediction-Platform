@@ -1,0 +1,223 @@
+# =============================================================================
+# AIESEC MC India - Exchange Activity Prediction Platform
+# Central configuration. NO SECRETS IN THIS FILE.
+# Secrets (API tokens) are read from the environment / .env - see .env.example
+# =============================================================================
+
+project:
+  name: "aiesec-exchange-prediction"
+  mc_name: "AIESEC in India"
+  description: "Exchange activity forecasting for AIESEC MC India (2026)"
+
+# -----------------------------------------------------------------------------
+# AIESEC Analytics API
+# -----------------------------------------------------------------------------
+api:
+  base_url: "https://analytics.api.aiesec.org"
+  analyze_endpoint: "/v2/applications/analyze.json"
+
+  # --- Identity of the office we are pulling data for -------------------------
+  # NOTE: office_id must be the EXPA office id of the MC (AIESEC in India).
+  # It is intentionally NOT hardcoded in source. Override with AIESEC_OFFICE_ID
+  # in .env, or set it here once confirmed against the GID documentation.
+  office_id: null
+  # Set to true once you have confirmed office_id against official docs.
+  office_id_verified: false
+
+  # Bracket-syntax filter namespace used by the analyze endpoint.
+  # The Analytics API groups filters under a namespace, e.g.
+  #   performance[office_id]=1589  |  recruitment[office_id]=1589
+  # Confirm the correct namespace for application analytics in the GID docs.
+  filter_namespace: "performance"
+
+  # Whether to include sub-offices (LCs) of the MC in the aggregation.
+  include_child_offices: true
+
+  # --- Transport --------------------------------------------------------------
+  timeout_seconds: 60
+  max_retries: 5
+  backoff_factor: 1.5          # exponential backoff base
+  retry_on_status: [429, 500, 502, 503, 504]
+  rate_limit_sleep_seconds: 0.35   # polite pause between successive calls
+  per_page: 100
+
+# -----------------------------------------------------------------------------
+# Collection window (inclusive)
+# -----------------------------------------------------------------------------
+collection:
+  start_date: "2022-01-01"
+  end_date: "2025-12-31"
+  # Data is pulled in monthly windows so that partial failures are recoverable
+  # and so the raw payloads stay small enough to inspect by hand.
+  window: "monthly"
+
+# -----------------------------------------------------------------------------
+# Exchange products.
+# GIS programme ids -> AIESEC product short names.
+# VERIFY these ids against the GID GraphQL/Analytics documentation before a
+# production pull; they are the conventional public mapping, not an official one.
+# -----------------------------------------------------------------------------
+products:
+  verified: false
+  mapping:
+    1: "GV"     # Global Volunteer
+    2: "GTa"    # Global Talent
+    5: "GTe"    # Global Teacher
+    7: "GE"     # Global Entrepreneur
+  # Products actually modelled (India MC operates these at scale)
+  active: ["GV", "GTa", "GTe"]
+
+directions:
+  - "incoming"   # i  (e.g. iGV)
+  - "outgoing"   # o  (e.g. oGV)
+
+# -----------------------------------------------------------------------------
+# Exchange funnel. Order matters - conversion rates are computed stage-to-stage.
+# -----------------------------------------------------------------------------
+funnel:
+  stages: ["APP", "ACH", "ACC", "APD", "RE", "FI", "CO"]
+  labels:
+    APP: "Applied"
+    ACH: "Achieved / Matched"
+    ACC: "Accepted"
+    APD: "Approved"
+    RE: "Realized"
+    FI: "Finished"
+    CO: "Completed"
+  # Maps API status keys -> our canonical stage codes.
+  api_status_map:
+    applied: "APP"
+    achieved: "ACH"
+    matched: "ACH"
+    accepted: "ACC"
+    approved: "APD"
+    realized: "RE"
+    finished: "FI"
+    completed: "CO"
+
+# -----------------------------------------------------------------------------
+# Paths (relative to project root). Never hardcode paths in source.
+# -----------------------------------------------------------------------------
+paths:
+  data_raw: "data/raw"
+  data_interim: "data/interim"
+  data_processed: "data/processed"
+  raw_responses: "data/raw/api_responses.json"
+  processed_dataset: "data/processed/exchange_data.csv"
+  monthly_series: "data/processed/monthly_applications.csv"
+  features: "data/processed/features.csv"
+  models_dir: "models"
+  trained_model: "models/trained_model.pkl"
+  outputs_dir: "outputs"
+  predictions: "outputs/predictions_2026.csv"
+  figures_dir: "outputs/figures"
+  reports_dir: "outputs/reports"
+
+# -----------------------------------------------------------------------------
+# Modelling
+# -----------------------------------------------------------------------------
+modeling:
+  target: "APP"                # forecast target = monthly applications
+  forecast_year: 2026
+  horizon: 12
+  seasonal_period: 12
+  random_state: 42
+
+  # Rolling-origin (walk-forward) backtest.
+  backtest:
+    initial_train_months: 24   # first origin after 24 months of history
+    step: 1
+    horizon: 1                 # 1-step-ahead at each origin
+    min_test_points: 12
+
+  # Candidate models. Disable any by setting enabled: false.
+  candidates:
+    naive_last: {enabled: true}
+    moving_average_3: {enabled: true, window: 3}
+    moving_average_6: {enabled: true, window: 6}
+    seasonal_naive: {enabled: true}          # previous year, same month
+    seasonal_naive_drift: {enabled: true}    # prev year same month * YoY growth
+    linear_regression: {enabled: true}
+    ridge: {enabled: true, alpha: 1.0}
+    random_forest: {enabled: true, n_estimators: 500, max_depth: 6}
+    gradient_boosting: {enabled: true, n_estimators: 400, max_depth: 3, learning_rate: 0.05}
+    xgboost: {enabled: true, n_estimators: 600, max_depth: 3, learning_rate: 0.05, subsample: 0.9}
+    holt_winters: {enabled: true, trend: "add", seasonal: "add"}
+    sarima: {enabled: true, order: [1, 1, 1], seasonal_order: [1, 1, 1, 12]}
+    prophet: {enabled: true}   # skipped automatically if prophet is not installed
+
+  # Final-model selection. Accuracy is primary; stability and explainability
+  # break ties within a tolerance band.
+  selection:
+    primary_metric: "MAE"
+    tolerance_pct: 5.0          # models within 5% of best MAE are "tied"
+    stability_metric: "rolling_mae_std"
+    explainability_rank:        # lower = more explainable, used as final tiebreak
+      seasonal_naive_drift: 1
+      seasonal_naive: 1
+      moving_average_3: 1
+      moving_average_6: 1
+      naive_last: 1
+      linear_regression: 2
+      ridge: 2
+      holt_winters: 3
+      sarima: 3
+      prophet: 3
+      random_forest: 4
+      gradient_boosting: 4
+      xgboost: 4
+
+# -----------------------------------------------------------------------------
+# Activity level thresholds, derived from the HISTORICAL monthly distribution.
+# High = top 25%, Medium = middle 50%, Low = bottom 25%.
+# -----------------------------------------------------------------------------
+activity_levels:
+  # trend_adjusted     - detrend before taking quartiles (DEFAULT, recommended).
+  #                      Compares months on SEASONAL strength, so a growing
+  #                      series does not collapse to "everything is High".
+  # historical_quartiles - literal quartiles of all historical monthly values.
+  # forecast_quartiles   - quartiles of the 12 forecast values themselves.
+  # All three are computed and reported; this setting picks the primary label.
+  method: "trend_adjusted"
+  low_quantile: 0.25
+  high_quantile: 0.75
+  labels:
+    low: "Low"
+    medium: "Medium"
+    high: "High"
+
+# -----------------------------------------------------------------------------
+# Offline reference dataset.
+# Used ONLY when no API credentials are available so that the full pipeline
+# remains runnable and reviewable. Clearly flagged in every artefact it touches.
+# -----------------------------------------------------------------------------
+reference_data:
+  enabled: true
+  random_seed: 42
+  # AIESEC in India local committees (entities) used for entity-level analysis.
+  entities:
+    - "AIESEC in Delhi IIT"
+    - "AIESEC in Delhi University"
+    - "AIESEC in Mumbai"
+    - "AIESEC in Pune"
+    - "AIESEC in Bangalore"
+    - "AIESEC in Chennai"
+    - "AIESEC in Hyderabad"
+    - "AIESEC in Kolkata"
+    - "AIESEC in Ahmedabad"
+    - "AIESEC in Jaipur"
+    - "AIESEC in Chandigarh"
+    - "AIESEC in Lucknow"
+    - "AIESEC in Indore"
+    - "AIESEC in Nagpur"
+    - "AIESEC in Kochi"
+    - "AIESEC in Coimbatore"
+    - "AIESEC in Bhubaneswar"
+    - "AIESEC in Vellore"
+    - "AIESEC in Manipal"
+    - "AIESEC in Surat"
+
+logging:
+  level: "INFO"
+  format: "%(asctime)s | %(levelname)-8s | %(name)-28s | %(message)s"
+  datefmt: "%Y-%m-%d %H:%M:%S"
