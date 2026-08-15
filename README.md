@@ -1,6 +1,8 @@
 # AI-Powered Exchange Activity Prediction Platform
 ### AIESEC MC India — 2026 Forecast
 
+https://jayed-alam-mansur-exchange-activity-prediction-platf-app-n1n2zt.streamlit.app
+
 Forecasting **high-activity exchange months for 2026** from historical AIESEC MC India
 application data (01-01-2022 → 31-12-2025), with a reproducible ML pipeline, a 12-model
 comparison, and an interactive dashboard.
