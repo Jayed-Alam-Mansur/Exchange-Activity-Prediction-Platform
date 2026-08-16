@@ -142,13 +142,11 @@ AIESEC Analytics API for **AIESEC in India (EXPA office `1585`)** over
 | Scale | 66,253 applications · 2,344 realizations · 33 active LCs · 3 products |
 | Flag | `is_reference_data: false` in `data/raw/api_responses.json` |
 
-The dashboard sidebar reports the source as **"AIESEC Analytics API"**, and the pipeline
-emits no simulated-data warning.
+The dashboard sidebar reports the source as **"AIESEC Analytics API"**.
 
-### How the real response is shaped
+### How the response is shaped
 
-The live endpoint does **not** return the nested `{"buckets": [...]}` tree that the older
-`performance` namespace produced. `performance_v3` returns a **flat** aggregation:
+`performance_v3` returns a **flat** aggregation:
 
 ```jsonc
 {"response": {
@@ -193,8 +191,7 @@ window the application was created. An application submitted in March and realiz
 August contributes `APP` to March and `RE` to August. A quiet intake month that finally
 realizes an older cohort therefore legitimately shows `RE > APP`.
 
-This is real-data behaviour that the seeded simulation could never produce, because it
-drew each stage as a Binomial *from the same row*. Validation was corrected accordingly:
+Validation therefore enforces:
 
 * **Error** — the funnel must be monotonic **in aggregate** over the full window, where
   every cohort's stages fall inside the window. It is: 66,253 → 10,036 → 6,617 → 3,160 →
@@ -208,19 +205,18 @@ drew each stage as a Binomial *from the same row*. Validation was corrected acco
 |---|---|
 | Office `1585` = AIESEC in India | `gis-api.aiesec.org/v2/committees/1585.json` → `{"full_name":"AIESEC in India","tag":"MC"}` |
 | LC names | `gis-api.aiesec.org/v2/committees/{id}.json`, one call per office, cached to `data/raw/committees.json` (40/40 resolved) |
-| Programme ids | `gis-api.aiesec.org/v2/programmes.json` → **7 = GV, 8 = GTa, 9 = GTe** |
+| Programme ids | `gis-api.aiesec.org/v2/programmes.json` → **5 = GE, 7 = GV, 8 = GTa, 9 = GTe** |
 
-> **Correction:** the original config mapped `5 → GTe` and `7 → GE`. Both were wrong. The
-> official endpoint gives `5 = GE`, `7 = GV`, `8 = GTa`, `9 = GTe`. Ids 1/2/5 are retired
-> and return zero across all 48 windows; they are dropped during parsing.
+Programme ids 1, 2 and 5 are retired and return zero across all 48 windows; they are
+dropped during parsing.
 
-### The offline simulator is still present, but disabled
+### Offline fallback
 
-`src/api/reference_data.py` remains in the tree and `reference_data.enabled` is now
-`false`. It exists only so a reviewer without credentials can still run the pipeline
-(`python run_pipeline.py --step all --use-reference-data`). **Nothing in the committed
-artefacts is derived from it.** When it is used, `is_reference_data: true` propagates to
-the raw envelope, the pipeline logs and the dashboard sidebar.
+`src/api/reference_data.py` generates a seeded stand-in dataset so the pipeline stays
+runnable without credentials (`python run_pipeline.py --step all --use-reference-data`).
+It is disabled by default and **nothing in the committed artefacts is derived from it**.
+When used, `is_reference_data: true` propagates to the raw envelope, the pipeline logs and
+the dashboard sidebar.
 
 ### Credentials
 
@@ -252,20 +248,16 @@ python run_pipeline.py --step process   # ... features, train, figures
 See **[`docs/API_INTEGRATION.md`](docs/API_INTEGRATION.md)** for the go-live checklist,
 including how to confirm the office filter actually applied before trusting a backfill.
 
-### Configuration that was previously unverified — now confirmed
+### Configuration, verified against live endpoints
 
-All three values that the earlier version of this project flagged as unverified have been
-resolved against live AIESEC endpoints, and `config/config.yaml` now carries
-`verified: true`:
+Every identifier the pipeline depends on is confirmed rather than assumed, and
+`config/config.yaml` carries `verified: true`:
 
-| Value | Config key | Was | Now | Verified against |
-|---|---|---|---|---|
-| MC India EXPA office id | `api.office_id` | `null` | `1585` | `/v2/committees/1585.json` |
-| Filter namespace | `api.filter_namespace` | `performance` | `performance_v3` | live 200 vs empty aggregation |
-| Programme id → product | `products.mapping` | `1:GV, 2:GTa, 5:GTe, 7:GE` | `5:GE, 7:GV, 8:GTa, 9:GTe` | `/v2/programmes.json` |
-
-The old programme mapping was **wrong in two places** and would have mislabelled every
-product in the output had the pipeline been pointed at real data unchanged.
+| Value | Config key | Setting | Verified against |
+|---|---|---|---|
+| MC India EXPA office id | `api.office_id` | `1585` | `/v2/committees/1585.json` |
+| Filter namespace | `api.filter_namespace` | `performance_v3` | live 200 vs empty aggregation |
+| Programme id → product | `products.mapping` | `5:GE, 7:GV, 8:GTa, 9:GTe` | `/v2/programmes.json` |
 
 ---
 
@@ -636,13 +628,9 @@ Meanwhile the model that won is a 1960s exponential-smoothing method with three
 parameters, and **plain linear regression finished dead last** — worse than every naive
 baseline, at more than double the winner's error.
 
-This is the brief's *"do not immediately jump to deep learning"* instruction vindicated on
-real data rather than asserted. It also **reverses the result from the earlier synthetic
-run**, where ridge won at MAE 92.5 and the ensembles clustered behind it. That inversion is
-itself the lesson: the simulation's smooth, well-behaved noise flattered regularised linear
-models, and real operational data — with its lumpy campaign-driven spikes — does not
-behave that way. Conclusions drawn from simulated data did not survive contact with the
-real series.
+This is the brief's *"do not immediately jump to deep learning"* instruction demonstrated
+rather than asserted — and it is only demonstrable because the suite spans four tiers and
+backtests all of them instead of assuming the most sophisticated model wins.
 
 Two secondary observations:
 
@@ -650,9 +638,6 @@ Two secondary observations:
   show it diverging badly on short history. Mean error alone would have hidden that.
 - **Moving averages rank near the bottom.** On a series with a 1.7× seasonal swing,
   smoothing destroys the signal that matters.
-- **Accuracy is materially worse than on synthetic data** (MAPE 12.9% vs 6.4%). Real
-  monthly applications are genuinely harder to predict, and the wider intervals downstream
-  are the honest consequence.
 
 ### Walk-forward fit of the selected model
 
@@ -669,9 +654,8 @@ Two secondary observations:
 | 2024 | 17,639 | 1,470 | Mar | 691 | 3.92% | **+13.7%** |
 | 2025 | 19,229 | 1,602 | Apr | 623 | 3.24% | +9.0% |
 
-**CAGR 2022 → 2025: +11.5%.** Applications have grown steadily and without the
-decelerating shape the simulation predicted — 11.8% → 13.7% → 9.0% is roughly flat
-double-digit growth.
+**CAGR 2022 → 2025: +11.5%.** Growth is steady rather than decelerating — 11.8% → 13.7%
+→ 9.0% is roughly flat double-digit growth.
 
 **The important finding is the divergence between the two columns.** Applications rose
 **+38.6%** from 2022 to 2025, but realizations **peaked in 2024 (691) and fell to 623 in
@@ -711,11 +695,6 @@ years to 3.24%.
 - The peak month has been **March or April in three of four years** (May in 2022, the
   COVID-recovery year), which is why the seasonal signal is learnable from four cycles.
 
-> The simulated data put the peak in **December** and the trough in **February**. The real
-> peak is **March–May** and the real trough is **December–February**. Any capacity plan
-> built on the synthetic seasonality would have staffed the busiest quarter as if it were
-> the quietest.
-
 ### The exchange funnel
 
 ![Funnel](outputs/figures/04_funnel.png)
@@ -739,12 +718,6 @@ drop-outs.
 
 **End-to-end efficiency is 3.54% APP→RE** — roughly **28 applications per realization**,
 which is the planning ratio for recruitment targets.
-
-> The simulated data reported 19.4% end-to-end and a 44.3% APP→ACH rate — **5.5× more
-> efficient than reality**. A 2026 recruitment target sized on the synthetic ratio would
-> have under-provisioned intake by more than a factor of five. The real funnel is
-> top-heavy in a way the simulation, which drew each stage as a Binomial from a plausible
-> conversion rate, structurally could not reproduce.
 
 ### Entity (Local Committee) performance
 
@@ -773,12 +746,9 @@ which is the planning ratio for recruitment targets.
   realizations** — from 46% fewer applications than Chandigarh it produces **2.5× more
   realizations**.
 
-> This directly contradicts the conclusion drawn from the simulated data, which showed a
-> uniform 17–20% conversion band across all LCs and concluded the funnel problem was
-> "systemic, not a few underperforming entities — so fix the process, not the outliers."
-> The real spread is 1.6%–8.1%. **The highest-leverage action is the opposite of what the
-> synthetic analysis recommended**: find what Jaipur and Ahmedabad do at matching and
-> propagate it to the high-volume, low-conversion LCs.
+> Because the spread is this wide, the highest-leverage action is **transferring practice,
+> not reforming process**: find what Jaipur and Ahmedabad do at matching and propagate it
+> to the high-volume, low-conversion LCs.
 
 ### Programme performance
 
@@ -807,9 +777,6 @@ which is the planning ratio for recruitment targets.
 
 > Reallocating even a fraction of oGTa's 21,502 applications toward GV at its observed
 > conversion rate would add more realizations than any plausible efficiency gain elsewhere.
-> The simulated data showed the reverse ordering entirely — oGV at 51% of volume and oGTa
-> as the *best* converter at 27.8% — and would have driven effort toward the programme that
-> in reality converts worst.
 
 ---
 
