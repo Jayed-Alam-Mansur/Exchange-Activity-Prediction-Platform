@@ -366,7 +366,7 @@ funnel status and per child office:
   "analytics": {
     "offices": {
       "buckets": [{
-        "key": 90001, "key_as_string": "AIESEC in Mumbai", "doc_count": 143,
+        "key": 90001, "key_as_string": "AIESEC in Example", "doc_count": 143,
         "directions": {
           "buckets": [{
             "key": "outgoing", "doc_count": 106,
@@ -725,30 +725,31 @@ which is the planning ratio for recruitment targets.
 
 | # | Local Committee | Applications | Realizations | MC share | APP→RE | Growth 22→25 |
 |---|---|---:|---:|---:|---:|---:|
-| 1 | AIESEC in Chandigarh | 6,939 | 120 | 10.5% | 1.73% | +69.8% |
-| 2 | AIESEC in Mumbai | 6,603 | **332** | 10.0% | 5.03% | −17.4% |
-| 3 | AIESEC in Delhi IIT | 6,274 | 137 | 9.5% | 2.18% | −15.7% |
-| 4 | AIESEC in Hyderabad | 4,641 | 128 | 7.0% | 2.76% | **+237.1%** |
-| 5 | AIESEC in Delhi University | 4,316 | 68 | 6.5% | 1.58% | −25.1% |
-| 6 | AIESEC in Bengaluru | 4,046 | 79 | 6.1% | 1.95% | −2.5% |
-| 7 | AIESEC in Chennai | 3,808 | 111 | 5.8% | 2.91% | +54.1% |
-| 8 | AIESEC in Jaipur | 3,772 | **304** | 5.7% | **8.06%** | +86.1% |
-| 9 | AIESEC in M.A.H.E. | 3,769 | 166 | 5.7% | 4.40% | **+471.7%** |
-| 10 | AIESEC in Ahmedabad | 2,737 | 138 | 4.1% | 5.04% | +21.5% |
+| 1 | LC A | 6,939 | 120 | 10.5% | 1.73% | +69.8% |
+| 2 | LC B | 6,603 | **332** | 10.0% | 5.03% | −17.4% |
+| 3 | LC C | 6,274 | 137 | 9.5% | 2.18% | −15.7% |
+| 4 | LC D | 4,641 | 128 | 7.0% | 2.76% | **+237.1%** |
+| 5 | LC E | 4,316 | 68 | 6.5% | 1.58% | −25.1% |
+| 6 | LC F | 4,046 | 79 | 6.1% | 1.95% | −2.5% |
+| 7 | LC G | 3,808 | 111 | 5.8% | 2.91% | +54.1% |
+| 8 | LC H | 3,772 | **304** | 5.7% | **8.06%** | +86.1% |
+| 9 | LC I | 3,769 | 166 | 5.7% | 4.40% | **+471.7%** |
+| 10 | LC J | 2,737 | 138 | 4.1% | 5.04% | +21.5% |
+
+<sub>Local Committees are anonymised in this public README. The identified breakdown is in
+`outputs/reports/entity_performance.csv` and on the dashboard.</sub>
 
 - **The top 5 LCs generate 43.4% of all applications; the top 10 generate 70.8%** across
   33 active entities. National performance inherits the risk of a handful of LCs.
-- **Conversion is not uniform — it varies 5× across comparable LCs.** Jaipur converts
-  **8.06%** APP→RE; Chandigarh, on *more* applications, converts **1.73%**. Delhi
-  University sits at 1.58%.
-- **Rank by applications and rank by realizations are different orderings.** Chandigarh is
-  #1 on intake but **#8 on realizations**; Jaipur is #8 on intake but **#2 on
-  realizations** — from 46% fewer applications than Chandigarh it produces **2.5× more
-  realizations**.
+- **Conversion is not uniform — it varies 5× across comparable LCs.** LC H converts
+  **8.06%** APP→RE; LC A, on *more* applications, converts **1.73%**. LC E sits at 1.58%.
+- **Rank by applications and rank by realizations are different orderings.** LC A is #1 on
+  intake but **#8 on realizations**; LC H is #8 on intake but **#2 on realizations** —
+  from 46% fewer applications than LC A it produces **2.5× more realizations**.
 
 > Because the spread is this wide, the highest-leverage action is **transferring practice,
-> not reforming process**: find what Jaipur and Ahmedabad do at matching and propagate it
-> to the high-volume, low-conversion LCs.
+> not reforming process**: find what the top-converting LCs do at matching and propagate it
+> to the high-volume, low-conversion ones.
 
 ### Programme performance
 
@@ -889,9 +890,9 @@ Dec 2026,1533,Medium,2026-12-01,12,223,3164,Medium,Low,holt_winters,10,7.26
    realizations (0.51%, ≈197 applications per realization). GV converts at 8–10%.
 5. **Reverse the iGV decline.** The single most productive programme (43% of all
    realizations) shrank 21.8% over the period while the worst converters grew.
-6. **Propagate what Jaipur does.** Conversion ranges 1.6%–8.1% across comparable LCs;
-   Jaipur produces 2.5× Chandigarh's realizations from 46% fewer applications. This is a
-   transferable-practice problem, not a systemic one.
+6. **Propagate what the best-converting LC does.** Conversion ranges 1.6%–8.1% across
+   comparable LCs; the best produces 2.5× the top-volume LC's realizations from 46% fewer
+   applications. This is a transferable-practice problem, not a systemic one.
 7. **Track realizations, not applications, as the headline metric.** Applications grew
    38.6% since 2022 while realizations fell from their 2024 peak — the current headline
    hides the trend that matters.
@@ -942,7 +943,7 @@ Findings generated directly from the data — **every number computed, none hand
 [Funnel]      The biggest drop-off is APP to ACH, losing 85% of candidates.
 [Funnel]      3.5% of applications convert all the way to a realization.
 [Entities]    The top 5 Local Committees generate 43% of all applications.
-[Entities]    AIESEC in M.A.H.E. is the fastest-growing large LC at +471.7% (2022->2025).
+[Entities]    <LC name> is the fastest-growing large LC at +471.7% (2022->2025).
 [Products]    oGTa is the largest programme at 32% of all applications.
 [Model]       The selected model (holt_winters) achieves 87.1% accuracy (MAPE 12.9%).
 ```
