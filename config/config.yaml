@@ -16,21 +16,30 @@ api:
   base_url: "https://analytics.api.aiesec.org"
   analyze_endpoint: "/v2/applications/analyze.json"
 
+  # Endpoint that resolves an EXPA office/committee id to its name.
+  committees_endpoint: "https://gis-api.aiesec.org/v2/committees/{id}.json"
+
   # --- Identity of the office we are pulling data for -------------------------
-  # NOTE: office_id must be the EXPA office id of the MC (AIESEC in India).
-  # It is intentionally NOT hardcoded in source. Override with AIESEC_OFFICE_ID
-  # in .env, or set it here once confirmed against the GID documentation.
-  office_id: null
-  # Set to true once you have confirmed office_id against official docs.
-  office_id_verified: false
+  # EXPA office id of the MC. VERIFIED against
+  #   https://gis-api.aiesec.org/v2/committees/1585.json
+  #   -> {"id":1585,"full_name":"AIESEC in India","tag":"MC"}
+  # Override with AIESEC_OFFICE_ID in .env if you pull a different office.
+  office_id: 1585
+  office_id_verified: true
 
   # Bracket-syntax filter namespace used by the analyze endpoint.
-  # The Analytics API groups filters under a namespace, e.g.
-  #   performance[office_id]=1589  |  recruitment[office_id]=1589
-  # Confirm the correct namespace for application analytics in the GID docs.
-  filter_namespace: "performance"
+  # VERIFIED: the live endpoint answers to `performance_v3[office_id]`.
+  # The older `performance` namespace returns an empty aggregation.
+  filter_namespace: "performance_v3"
+
+  # The v3 aggregation already breaks every metric down by programme
+  # (`i_applied_7`, `o_realized_8`, ...), so scoping each request to a single
+  # programme would triple the request count and return duplicate data.
+  # One request per month window is sufficient.
+  split_requests_by_programme: false
 
   # Whether to include sub-offices (LCs) of the MC in the aggregation.
+  # The v3 response returns per-LC breakdowns keyed by office id regardless.
   include_child_offices: true
 
   # --- Transport --------------------------------------------------------------
@@ -58,13 +67,22 @@ collection:
 # production pull; they are the conventional public mapping, not an official one.
 # -----------------------------------------------------------------------------
 products:
-  verified: false
+  # VERIFIED against https://gis-api.aiesec.org/v2/programmes.json
+  # (id | short_name | consumer_name). The previous mapping in this file was
+  # wrong: it listed 5 as GTe and 7 as GE.
+  verified: true
   mapping:
-    1: "GV"     # Global Volunteer
-    2: "GTa"    # Global Talent
-    5: "GTe"    # Global Teacher
-    7: "GE"     # Global Entrepreneur
-  # Products actually modelled (India MC operates these at scale)
+    1: "GV-legacy"    # Global Volunteer  (retired id, zero volume since 2022)
+    2: "GT-legacy"    # Global Talent     (retired id, zero volume since 2022)
+    3: "TMP"          # Join in Campus
+    4: "TLP"          # Join in Campus
+    5: "GE"           # Global Entrepreneur
+    6: "LV"           # Local Volunteer
+    7: "GV"           # Global Volunteer  <- current
+    8: "GTa"          # Global Talent     <- current
+    9: "GTe"          # Global Teacher    <- current
+  # Products actually modelled. Ids 7/8/9 are the only ones carrying volume in
+  # the 2022-2025 MC India data; 1/2/5 return zero across every window.
   active: ["GV", "GTa", "GTe"]
 
 directions:
@@ -85,15 +103,26 @@ funnel:
     FI: "Finished"
     CO: "Completed"
   # Maps API status keys -> our canonical stage codes.
+  # VERIFIED against the live performance_v3 aggregation, whose per-cell keys are
+  # `<i|o>_<status>_<programme_id>` and whose MC totals are `<status>_total`.
   api_status_map:
     applied: "APP"
-    achieved: "ACH"
     matched: "ACH"
+    achieved: "ACH"          # legacy spelling, kept for older payloads
+    an_accepted: "ACC"       # v3 spelling of "accepted"
     accepted: "ACC"
     approved: "APD"
     realized: "RE"
     finished: "FI"
     completed: "CO"
+
+  # Statuses the API reports that are NOT funnel stages. They are drop-outs and
+  # side-channels: counting them as stages would break monotonicity.
+  # They are still captured as diagnostic columns.
+  non_stage_statuses:
+    approval_broken: "APPROVAL_BROKEN"
+    realization_broken: "REALIZATION_BROKEN"
+    remote_realized: "REMOTE_RE"
 
 # -----------------------------------------------------------------------------
 # Paths (relative to project root). Never hardcode paths in source.
@@ -103,6 +132,7 @@ paths:
   data_interim: "data/interim"
   data_processed: "data/processed"
   raw_responses: "data/raw/api_responses.json"
+  committees: "data/raw/committees.json"
   processed_dataset: "data/processed/exchange_data.csv"
   monthly_series: "data/processed/monthly_applications.csv"
   features: "data/processed/features.csv"
@@ -192,9 +222,14 @@ activity_levels:
 # remains runnable and reviewable. Clearly flagged in every artefact it touches.
 # -----------------------------------------------------------------------------
 reference_data:
-  enabled: true
+  # DISABLED. The project now runs on real EXPA data pulled from the Analytics
+  # API (2022-01-01 .. 2025-12-31, office 1585). This block is retained only as
+  # an offline fallback for environments with no credentials; nothing in the
+  # committed artefacts is derived from it.
+  enabled: false
   random_seed: 42
-  # AIESEC in India local committees (entities) used for entity-level analysis.
+  # SYNTHETIC placeholder LC names - superseded by the real committee names
+  # resolved from the GIS committees endpoint into data/raw/committees.json.
   entities:
     - "AIESEC in Delhi IIT"
     - "AIESEC in Delhi University"

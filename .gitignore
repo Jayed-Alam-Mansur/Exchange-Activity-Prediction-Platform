@@ -28,6 +28,13 @@ ENV/
 htmlcov/
 .ipynb_checkpoints/
 
+# --- Documents / handbooks (not part of the codebase) ------------------------
+*.pdf
+*.docx
+*.pptx
+docs/*Handbook*
+docs/*Guide*
+
 # --- OS / editors ------------------------------------------------------------
 .DS_Store
 Thumbs.db
@@ -39,6 +46,9 @@ Thumbs.db
 # live run they contain entity-level operational data that should stay local.
 data/raw/*.json
 !data/raw/.gitkeep
+# The hand-exported EXPA snapshot the project was seeded from - same policy as
+# data/raw/: real entity-level operational payload, regenerable from the API.
+data/expa_analytics_data.json
 data/interim/*
 !data/interim/.gitkeep
 

@@ -45,8 +45,118 @@ from src.preprocessing.analysis import (
     seasonality_profile,
     yearly_summary,
 )
-from src.preprocessing.cleaning import parse_envelope, parse_payload, validate_dataset
+from src.preprocessing.cleaning import (
+    is_v3_payload,
+    parse_envelope,
+    parse_payload,
+    parse_v3_payload,
+    validate_dataset,
+)
 from src.preprocessing.features import build_training_frame, compute_feature_row
+
+
+def _v3_metric(count: int) -> dict:
+    """One metric node in the live ``performance_v3`` shape."""
+    return {"doc_count": count, "applicants": {"value": count}}
+
+
+@pytest.fixture(scope="module")
+def v3_payload() -> dict:
+    """A miniature ``performance_v3`` response mirroring the live shape.
+
+    Two child offices, programme 7 (GV) and 8 (GTa), both directions, plus the
+    MC-level totals the real endpoint repeats alongside the per-office nodes.
+    """
+    office_a = {
+        "applied_total": _v3_metric(30),
+        "i_applied_7": _v3_metric(10),
+        "i_matched_7": _v3_metric(4),
+        "i_an_accepted_7": _v3_metric(3),
+        "i_approved_7": _v3_metric(2),
+        "i_realized_7": _v3_metric(1),
+        "i_approval_broken_7": _v3_metric(5),
+        "o_applied_8": _v3_metric(20),
+        "o_matched_8": _v3_metric(6),
+    }
+    office_b = {
+        "applied_total": _v3_metric(7),
+        "i_applied_7": _v3_metric(7),
+        "i_matched_7": _v3_metric(2),
+        # A retired programme id the API still reports as all-zero.
+        "i_applied_1": _v3_metric(0),
+    }
+    return {
+        "is_cached_response": True,
+        "response": {
+            "1449": office_a,
+            "1393": office_b,
+            # MC-level repeats - must NOT be double counted.
+            "applied_total": _v3_metric(37),
+            "matched_total": _v3_metric(12),
+            "i_applied_7": _v3_metric(17),
+            "open_icx": {"doc_count": 3, "total_openings": {"value": 99.0}},
+        },
+        "cached_at": "2026-08-16T03:01:45.859Z",
+    }
+
+
+class TestV3Parsing:
+    """The flat aggregation shape the live Analytics API actually returns."""
+
+    def test_is_v3_payload_discriminates(self, v3_payload):
+        assert is_v3_payload(v3_payload)
+        # The legacy nested-buckets shape must not be routed to the v3 parser.
+        legacy = {"analytics": {"offices": {"buckets": [{"key": 1, "doc_count": 3}]}}}
+        assert not is_v3_payload(legacy)
+
+    def test_parses_per_office_cells(self, v3_payload, settings):
+        counts = parse_v3_payload(v3_payload, settings, {"1449": "AIESEC in Chandigarh"})
+        cell = counts[("AIESEC in Chandigarh", "GV", "incoming")]
+        assert cell["APP"] == 10
+        assert cell["ACH"] == 4          # `matched` -> ACH
+        assert cell["ACC"] == 3          # `an_accepted` -> ACC
+        assert cell["RE"] == 1
+        assert cell["APPROVAL_BROKEN"] == 5   # captured, but not a funnel stage
+
+    def test_mc_level_totals_are_not_double_counted(self, v3_payload, settings):
+        """The response repeats every metric at MC level next to the office nodes.
+
+        Summing both would exactly double the dataset, so the parser must read
+        only the per-office nodes.
+        """
+        counts = parse_v3_payload(v3_payload, settings)
+        total_app = sum(cell.get("APP", 0) for cell in counts.values())
+        # Offices only: 10 (A incoming GV) + 20 (A outgoing GTa) + 7 (B incoming GV).
+        # Including the MC-level `i_applied_7` repeat would push this to 54.
+        assert total_app == 37
+
+    def test_unresolved_office_ids_fall_back_to_the_id(self, v3_payload, settings):
+        counts = parse_v3_payload(v3_payload, settings, entity_names={})
+        assert ("office 1393", "GV", "incoming") in counts
+
+    def test_two_digit_programme_ids_parse_correctly(self, settings):
+        """`i_applied_12` must read as programme 12, not programme 2."""
+        payload = {
+            "response": {
+                "99": {"applied_total": _v3_metric(5), "i_applied_12": _v3_metric(5)}
+            }
+        }
+        counts = parse_v3_payload(payload, settings)
+        products = {product for _, product, _ in counts}
+        assert products == {"programme_12"}
+
+    def test_envelope_routes_v3_records(self, v3_payload, settings):
+        envelope = {
+            "metadata": {"is_reference_data": False},
+            "records": [
+                {"month": "2024-03", "product": "ALL", "pages": [v3_payload]},
+            ],
+        }
+        frame = parse_envelope(envelope, settings)
+        assert frame["APP"].sum() == 37
+        assert set(frame["direction"].unique()) <= {"incoming", "outgoing"}
+        # The all-zero retired-programme cell is dropped.
+        assert not frame["product"].str.contains("legacy").any()
 
 
 # ---------------------------------------------------------------------------
@@ -207,7 +317,13 @@ class TestParsing:
 # ---------------------------------------------------------------------------
 class TestDataset:
     def test_panel_has_expected_shape(self, panel, settings):
-        assert len(panel) == 48 * len(settings.entities) * 6  # months x LCs x programmes
+        # The parser drops cells that are all-zero across every stage (the API
+        # reports retired programme ids that way), so the panel is the dense
+        # months x LCs x programmes grid minus its empty cells.
+        dense = 48 * len(settings.entities) * 6
+        assert 0 < len(panel) <= dense
+        stage_totals = panel[settings.funnel_stages].sum(axis=1)
+        assert (stage_totals > 0).all(), "an all-zero cell survived parsing"
         assert panel["date"].dt.to_period("M").nunique() == 48
         for stage in settings.funnel_stages:
             assert stage in panel.columns
@@ -225,11 +341,25 @@ class TestDataset:
         assert validate_dataset(panel, settings).passed
 
     def test_validation_catches_funnel_violation(self, panel, settings):
+        # A single inflated cell large enough to invert the aggregate funnel.
         broken = panel.copy()
-        broken.loc[0, "CO"] = broken.loc[0, "APP"] + 1000
+        broken.loc[0, "CO"] = int(broken["FI"].sum()) + 1000
         report = validate_dataset(broken, settings)
         assert not report.passed
-        assert any("monotonicity" in error for error in report.errors)
+        assert any("Aggregate funnel inverted" in error for error in report.errors)
+
+    def test_per_row_inversion_is_a_warning_not_an_error(self, panel, settings):
+        """Period-scoped status dating legitimately puts RE above APP in a month.
+
+        The API counts each status in the window it occurred in, so a quiet
+        intake month that realizes an older cohort is valid data, not corruption.
+        It must not fail validation.
+        """
+        skewed = panel.copy()
+        skewed.loc[0, "APP"] = 0  # a month that realizes only prior cohorts
+        report = validate_dataset(skewed, settings)
+        assert report.passed
+        assert any("expected" in warning for warning in report.warnings)
 
     def test_validation_catches_missing_months(self, panel, settings):
         gapped = panel[panel["date"] != panel["date"].max()]

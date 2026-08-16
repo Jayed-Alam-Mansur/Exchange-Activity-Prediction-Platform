@@ -78,6 +78,7 @@ class ProjectPaths:
     data_interim: Path
     data_processed: Path
     raw_responses: Path
+    committees: Path
     processed_dataset: Path
     monthly_series: Path
     features: Path
@@ -160,6 +161,19 @@ class Settings:
         return dict(self.raw.get("funnel", {}).get("api_status_map", {}))
 
     @property
+    def non_stage_statuses(self) -> Dict[str, str]:
+        """API statuses that are drop-outs/side-channels, not funnel stages."""
+        return dict(self.raw.get("funnel", {}).get("non_stage_statuses", {}))
+
+    @property
+    def committees_endpoint(self) -> str:
+        return str(
+            self.api.get(
+                "committees_endpoint", "https://gis-api.aiesec.org/v2/committees/{id}.json"
+            )
+        )
+
+    @property
     def products(self) -> List[str]:
         return list(self.raw.get("products", {}).get("active", []))
 
@@ -238,6 +252,7 @@ def _build_paths(root: Path, path_cfg: Dict[str, str]) -> ProjectPaths:
         data_interim=resolve("data_interim", "data/interim"),
         data_processed=resolve("data_processed", "data/processed"),
         raw_responses=resolve("raw_responses", "data/raw/api_responses.json"),
+        committees=resolve("committees", "data/raw/committees.json"),
         processed_dataset=resolve("processed_dataset", "data/processed/exchange_data.csv"),
         monthly_series=resolve("monthly_series", "data/processed/monthly_applications.csv"),
         features=resolve("features", "data/processed/features.csv"),

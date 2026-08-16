@@ -1,0 +1,12 @@
+{
+  "source": "AIESEC Analytics API",
+  "endpoint": "https://analytics.api.aiesec.org/v2/applications/analyze.json",
+  "mc_name": "AIESEC in India",
+  "office_id": 1585,
+  "collection_start": "2022-01-01",
+  "collection_end": "2025-12-31",
+  "collected_at": "2026-08-16T09:45:27.135451+05:45",
+  "record_count": 48,
+  "failed_windows": [],
+  "is_reference_data": false
+}

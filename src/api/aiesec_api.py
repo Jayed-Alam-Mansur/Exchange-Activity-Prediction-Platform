@@ -62,6 +62,8 @@ __all__ = [
     "AiesecAnalyticsClient",
     "CollectionResult",
     "collect_exchange_data",
+    "fetch_committee_names",
+    "load_committee_names",
     "month_windows",
     "redact_token",
 ]
@@ -310,20 +312,18 @@ class AiesecAnalyticsClient:
         Returns:
             A parameter dict ready to hand to ``requests``.
         """
-        namespace = str(self.settings.api.get("filter_namespace", "performance"))
+        namespace = str(self.settings.api.get("filter_namespace", "performance_v3"))
         office_id = self.settings.require_office_id()
 
+        # The v3 analyze endpoint is a pure aggregation: it takes no paging
+        # parameters and returns no paging block. Sending page/per_page is
+        # harmless but noisy, so they are omitted.
         params: Dict[str, Any] = {
             "access_token": self.settings.require_token(),
             "start_date": start_date,
             "end_date": end_date,
             f"{namespace}[office_id]": office_id,
-            "page": page,
-            "per_page": self._per_page,
         }
-
-        if self.settings.api.get("include_child_offices", True):
-            params[f"{namespace}[include_child_offices]"] = "true"
 
         if programme_id is not None:
             params[f"{namespace}[programmes][]"] = programme_id
@@ -469,11 +469,18 @@ def collect_exchange_data(
     window_end = end_date or str(settings.collection.get("end_date", "2025-12-31"))
     windows = month_windows(window_start, window_end)
 
-    programme_mapping = settings.programme_mapping
-    active_products = set(settings.products)
-    programmes: List[Tuple[Optional[int], str]] = [
-        (pid, name) for pid, name in programme_mapping.items() if name in active_products
-    ] or [(None, "ALL")]
+    # The performance_v3 aggregation already returns every metric broken down by
+    # programme id (`i_applied_7`, `o_realized_8`, ...). Splitting the pull by
+    # programme would triple the request count and return the same numbers, so
+    # by default one unscoped request per month window is issued.
+    if settings.api.get("split_requests_by_programme", False):
+        programme_mapping = settings.programme_mapping
+        active_products = set(settings.products)
+        programmes: List[Tuple[Optional[int], str]] = [
+            (pid, name) for pid, name in programme_mapping.items() if name in active_products
+        ] or [(None, "ALL")]
+    else:
+        programmes = [(None, "ALL")]
 
     logger.info(
         "Collecting %s: %d month(s) x %d programme(s) = %d request group(s)",
@@ -596,7 +603,115 @@ def save_raw_responses(
         json.dump(envelope, handle, indent=2, ensure_ascii=False)
 
     logger.info("Raw API responses written to %s", output_path)
+
+    # The raw envelope is large and git-ignored, so a deployed dashboard (e.g.
+    # Streamlit Cloud) never sees it. Mirror just the metadata into the
+    # processed directory, which IS committed, so provenance survives deploy.
+    provenance_path = settings.paths.data_processed / "provenance.json"
+    provenance_path.parent.mkdir(parents=True, exist_ok=True)
+    with provenance_path.open("w", encoding="utf-8") as handle:
+        json.dump(envelope["metadata"], handle, indent=2, ensure_ascii=False)
+    logger.info("Provenance written to %s", provenance_path)
+
     return output_path
+
+
+# ---------------------------------------------------------------------------
+# Committee (office) name resolution
+# ---------------------------------------------------------------------------
+def fetch_committee_names(
+    office_ids: Iterable[int | str],
+    settings: Optional[Settings] = None,
+    save: bool = True,
+) -> Dict[str, str]:
+    """Resolve EXPA office ids to human-readable committee names.
+
+    The analytics aggregation keys its per-LC breakdown by numeric office id
+    only, so entity-level output would otherwise read ``1449`` instead of
+    ``AIESEC in Chandigarh``. The GIS API exposes one committee per request at
+    ``/v2/committees/{id}.json``; the bulk ``offices.json`` route returns 404 and
+    ``committees.json`` returns an empty collection for this token, so ids are
+    fetched individually and cached to disk.
+
+    Args:
+        office_ids: EXPA office ids appearing in the analytics response.
+        settings: Loaded settings. Loaded from disk when omitted.
+        save: Cache the mapping to ``data/raw/committees.json``.
+
+    Returns:
+        Mapping of ``str(office_id)`` -> committee ``full_name``. Ids that
+        cannot be resolved are omitted, and callers should fall back to the id.
+    """
+    settings = settings or get_settings()
+    template = settings.committees_endpoint
+    token = settings.require_token()
+
+    cache_path = settings.paths.committees
+    resolved: Dict[str, str] = {}
+    if cache_path.exists():
+        try:
+            with cache_path.open("r", encoding="utf-8") as handle:
+                cached = json.load(handle)
+            resolved.update({str(k): str(v) for k, v in (cached.get("names") or {}).items()})
+        except (ValueError, AttributeError):
+            logger.warning("Ignoring unreadable committee cache at %s", cache_path)
+
+    session = requests.Session()
+    session.headers.update({"Accept": "application/json"})
+    throttle = float(settings.api.get("rate_limit_sleep_seconds", 0.35))
+
+    for office_id in office_ids:
+        key = str(office_id)
+        if key in resolved:
+            continue
+        url = template.format(id=key)
+        try:
+            response = session.get(url, params={"access_token": token}, timeout=30)
+            if not response.ok:
+                logger.warning(
+                    "Committee %s did not resolve (HTTP %s)", key, response.status_code
+                )
+                continue
+            body = response.json()
+        except (requests.RequestException, ValueError) as exc:
+            logger.warning("Committee %s did not resolve: %s", key, exc)
+            continue
+
+        name = body.get("full_name") or body.get("name")
+        if name:
+            resolved[key] = str(name)
+        time.sleep(throttle)
+
+    if save:
+        cache_path.parent.mkdir(parents=True, exist_ok=True)
+        with cache_path.open("w", encoding="utf-8") as handle:
+            json.dump(
+                {
+                    "source": "AIESEC GIS API /v2/committees/{id}.json",
+                    "fetched_at": datetime.now().astimezone().isoformat(),
+                    "count": len(resolved),
+                    "names": resolved,
+                },
+                handle,
+                indent=2,
+                ensure_ascii=False,
+            )
+        logger.info("Committee names cached to %s (%d offices)", cache_path, len(resolved))
+
+    return resolved
+
+
+def load_committee_names(settings: Optional[Settings] = None) -> Dict[str, str]:
+    """Read the cached office-id -> committee-name mapping, or ``{}`` if absent."""
+    settings = settings or get_settings()
+    path = settings.paths.committees
+    if not path.exists():
+        return {}
+    try:
+        with path.open("r", encoding="utf-8") as handle:
+            return {str(k): str(v) for k, v in (json.load(handle).get("names") or {}).items()}
+    except (ValueError, AttributeError):
+        return {}
 
 
 def load_raw_responses(settings: Optional[Settings] = None) -> Dict[str, Any]:

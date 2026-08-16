@@ -39,16 +39,19 @@ APP..CO       Funnel stage counts, monotonically non-increasing
 from __future__ import annotations
 
 import logging
+import re
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Tuple
 
 import pandas as pd
 
-from src.api.aiesec_api import load_raw_responses
+from src.api.aiesec_api import load_committee_names, load_raw_responses
 from src.config import Settings, get_settings
 
 __all__ = [
     "parse_payload",
+    "parse_v3_payload",
+    "is_v3_payload",
     "parse_envelope",
     "build_exchange_dataset",
     "load_exchange_dataset",
@@ -233,6 +236,158 @@ def _consume_bucket(
     parse_payload(bucket, status_map, programme_mapping, context.merged(**updates), sink)
 
 
+# ---------------------------------------------------------------------------
+# performance_v3 parsing (the shape the live Analytics API actually returns)
+# ---------------------------------------------------------------------------
+#: Per-cell metric key, e.g. ``i_applied_7`` / ``o_realization_broken_9``.
+#: The status class excludes digits so the trailing programme id is captured
+#: correctly even for two-digit programme ids.
+_V3_CELL_RE = re.compile(r"^(?P<direction>[io])_(?P<status>[a-z_]+)_(?P<programme>\d+)$")
+
+#: Per-entity key for currently open opportunities, e.g. ``open_i_programme_7``.
+_V3_OPEN_RE = re.compile(r"^open_(?P<direction>[io])_programme_(?P<programme>\d+)$")
+
+#: Marks a node as an entity (child office) rather than a metric.
+_V3_ENTITY_MARKER = "applied_total"
+
+
+def is_v3_payload(payload: Any) -> bool:
+    """Detect the flat ``performance_v3`` aggregation shape.
+
+    The v3 endpoint returns ``{"response": {...}}`` with metric keys such as
+    ``applied_total`` and ``i_realized_7`` rather than the nested
+    ``{"buckets": [...]}`` tree the legacy ``performance`` namespace produced.
+
+    Args:
+        payload: A decoded response body.
+
+    Returns:
+        ``True`` when the payload should be routed to :func:`parse_v3_payload`.
+    """
+    if not isinstance(payload, dict):
+        return False
+    body = payload.get("response", payload)
+    if not isinstance(body, dict):
+        return False
+    return _V3_ENTITY_MARKER in body or any(_V3_CELL_RE.match(str(k)) for k in body)
+
+
+def _v3_measure(node: Any) -> int:
+    """Extract the additive count from one v3 metric node.
+
+    ``doc_count`` is used rather than ``applicants.value``. ``applicants`` is an
+    Elasticsearch cardinality aggregation (distinct people), which is **not
+    additive**: a person who applies in January and again in February counts
+    once in a yearly window but twice across two monthly windows, so summing it
+    over months would not reconcile with the yearly total. ``doc_count`` counts
+    application records and sums cleanly.
+
+    Args:
+        node: A metric node such as ``{"doc_count": 12, "applicants": {...}}``.
+
+    Returns:
+        The document count, or 0 for a malformed node.
+    """
+    if not isinstance(node, dict):
+        return 0
+    return _coerce_int(node.get("doc_count"))
+
+
+def parse_v3_payload(
+    payload: Dict[str, Any],
+    settings: Settings,
+    entity_names: Optional[Dict[str, str]] = None,
+) -> Dict[Tuple[Optional[str], Optional[str], Optional[str]], Dict[str, int]]:
+    """Extract per-entity funnel counts from one ``performance_v3`` response.
+
+    Only the per-entity nodes are read. The same response repeats every metric
+    at MC level (``applied_total``, ``i_applied_7``, ...); those top-level keys
+    are the sum of the entity nodes, so parsing both would double every count.
+
+    Args:
+        payload: One decoded response body (with or without the ``response`` envelope).
+        settings: Loaded settings (funnel vocabulary, programme mapping).
+        entity_names: Office id -> committee name. Unresolved ids fall back to
+            ``office <id>``.
+
+    Returns:
+        Accumulator keyed by ``(entity, product, direction)``, mapping each
+        combination to its stage counts plus any non-stage diagnostic counts.
+    """
+    body = payload.get("response", payload)
+    if not isinstance(body, dict):
+        return {}
+
+    status_map = {k.lower(): v for k, v in settings.api_status_map.items()}
+    extra_map = {k.lower(): v for k, v in settings.non_stage_statuses.items()}
+    programme_mapping = settings.programme_mapping
+    entity_names = entity_names or {}
+
+    sink: Dict[Tuple[Optional[str], Optional[str], Optional[str]], Dict[str, int]] = {}
+
+    for raw_key, node in body.items():
+        key = str(raw_key)
+        # Entity nodes are keyed by numeric office id and carry the full metric set.
+        if not key.isdigit() or not isinstance(node, dict) or _V3_ENTITY_MARKER not in node:
+            continue
+
+        entity = entity_names.get(key) or f"office {key}"
+
+        for metric_key, metric_node in node.items():
+            match = _V3_CELL_RE.match(str(metric_key))
+            if match is None:
+                continue
+
+            direction = _normalise_direction(match.group("direction"))
+            programme_id = int(match.group("programme"))
+            product = programme_mapping.get(programme_id, f"programme_{programme_id}")
+            status = match.group("status").lower()
+
+            column = status_map.get(status) or extra_map.get(status)
+            if column is None:
+                continue
+
+            count = _v3_measure(metric_node)
+            cell = sink.setdefault((entity, product, direction), {})
+            cell[column] = cell.get(column, 0) + count
+
+    return sink
+
+
+def _v3_open_openings(
+    payload: Dict[str, Any], settings: Settings
+) -> Dict[Tuple[str, str], int]:
+    """Read MC-level open-opportunity counts, keyed by ``(product, direction)``.
+
+    Openings are reported both as ``doc_count`` (number of open opportunities)
+    and, for incoming, ``total_openings`` (number of seats). The seat count is
+    used for incoming and the opportunity count for outgoing, matching what each
+    side of the exchange actually constrains.
+    """
+    body = payload.get("response", payload)
+    if not isinstance(body, dict):
+        return {}
+
+    programme_mapping = settings.programme_mapping
+    openings: Dict[Tuple[str, str], int] = {}
+
+    for raw_key, node in body.items():
+        match = _V3_OPEN_RE.match(str(raw_key))
+        if match is None or not isinstance(node, dict):
+            continue
+        direction = _normalise_direction(match.group("direction")) or "unknown"
+        product = programme_mapping.get(
+            int(match.group("programme")), f"programme_{match.group('programme')}"
+        )
+        seats = node.get("total_openings")
+        if isinstance(seats, dict):
+            seats = seats.get("value")
+        value = _coerce_int(seats) if seats is not None else _coerce_int(node.get("doc_count"))
+        openings[(product, direction)] = openings.get((product, direction), 0) + value
+
+    return openings
+
+
 def parse_envelope(envelope: Dict[str, Any], settings: Settings) -> pd.DataFrame:
     """Convert a raw-response envelope into the tidy monthly panel.
 
@@ -253,6 +408,8 @@ def parse_envelope(envelope: Dict[str, Any], settings: Settings) -> pd.DataFrame
     status_map = {k.lower(): v for k, v in settings.api_status_map.items()}
     programme_mapping = settings.programme_mapping
     stages = settings.funnel_stages
+    extra_columns = sorted(set(settings.non_stage_statuses.values()))
+    entity_names = load_committee_names(settings)
 
     rows: List[Dict[str, Any]] = []
 
@@ -261,7 +418,10 @@ def parse_envelope(envelope: Dict[str, Any], settings: Settings) -> pd.DataFrame
         record_product = record.get("product")
 
         for page in record.get("pages", []):
-            counts = parse_payload(page, status_map, programme_mapping)
+            if is_v3_payload(page):
+                counts = parse_v3_payload(page, settings, entity_names)
+            else:
+                counts = parse_payload(page, status_map, programme_mapping)
 
             for (entity, product, direction), stage_counts in counts.items():
                 if not stage_counts:
@@ -272,8 +432,8 @@ def parse_envelope(envelope: Dict[str, Any], settings: Settings) -> pd.DataFrame
                     "product": product or record_product or "UNKNOWN",
                     "direction": direction or "unknown",
                 }
-                for stage in stages:
-                    row[stage] = int(stage_counts.get(stage, 0))
+                for column in [*stages, *extra_columns]:
+                    row[column] = int(stage_counts.get(column, 0))
                 rows.append(row)
 
     if not rows:
@@ -286,8 +446,13 @@ def parse_envelope(envelope: Dict[str, Any], settings: Settings) -> pd.DataFrame
     frame = pd.DataFrame(rows)
 
     # Collapse duplicates that arise when the same cell appears across pages.
+    value_columns = [*stages, *extra_columns]
     group_cols = ["month_key", "entity", "product", "direction"]
-    frame = frame.groupby(group_cols, as_index=False)[stages].sum()
+    frame = frame.groupby(group_cols, as_index=False)[value_columns].sum()
+
+    # Drop cells that are entirely empty across the whole window - these are the
+    # retired programme ids (1/2/5), which the API still reports as all-zero.
+    frame = frame.loc[frame[value_columns].sum(axis=1) > 0].reset_index(drop=True)
 
     return _add_calendar_columns(frame)
 
@@ -340,17 +505,30 @@ def validate_dataset(frame: pd.DataFrame, settings: Settings) -> ValidationRepor
     Checks performed:
       1. Required columns are present.
       2. No negative counts.
-      3. The funnel is monotonically non-increasing within every row.
+      3. The funnel is monotonically non-increasing **in aggregate**.
       4. Every month in the configured collection window is represented.
       5. No duplicate (month, entity, programme) cells.
+
+    Note on monotonicity:
+        The Analytics API counts each status in the window in which *that
+        status* occurred, not in the window the application was created. An
+        application submitted in March and realized in August therefore
+        contributes ``APP`` to March and ``RE`` to August. Individual
+        (month, entity, programme) rows consequently need **not** satisfy
+        ``APP >= ACH >= ... >= CO`` - a low-intake month that finally realizes an
+        older cohort legitimately shows ``RE > APP``.
+
+        What must hold is the aggregate over the full collection window, where
+        every cohort's stages fall inside the window. That is checked as an
+        error; per-row inversions are reported as an informational warning only.
 
     Args:
         frame: The processed panel.
         settings: Loaded settings (funnel stages, collection window).
 
     Returns:
-        A :class:`ValidationReport`. Monotonicity and coverage gaps are errors;
-        anything recoverable is a warning.
+        A :class:`ValidationReport`. Aggregate monotonicity and coverage gaps
+        are errors; anything recoverable is a warning.
     """
     errors: List[str] = []
     warnings: List[str] = []
@@ -371,14 +549,25 @@ def validate_dataset(frame: pd.DataFrame, settings: Settings) -> ValidationRepor
     if any(negatives.values()):
         errors.append(f"Negative counts found: { {k: v for k, v in negatives.items() if v} }")
 
-    # 3. Funnel monotonicity.
-    violations = 0
+    # 3a. Aggregate funnel monotonicity - the invariant that must hold.
+    totals = {stage: int(frame[stage].sum()) for stage in stages}
     for earlier, later in zip(stages, stages[1:]):
-        violations += int((frame[later] > frame[earlier]).sum())
-    if violations:
-        errors.append(
-            f"{violations} row(s) violate funnel monotonicity "
-            "(a downstream stage exceeds its upstream stage)"
+        if totals[later] > totals[earlier]:
+            errors.append(
+                f"Aggregate funnel inverted: {later} ({totals[later]:,}) exceeds "
+                f"{earlier} ({totals[earlier]:,}) across the whole window"
+            )
+
+    # 3b. Per-row inversions - expected for period-scoped status counting.
+    row_violations = 0
+    for earlier, later in zip(stages, stages[1:]):
+        row_violations += int((frame[later] > frame[earlier]).sum())
+    if row_violations:
+        warnings.append(
+            f"{row_violations} row(s) show a downstream stage above its upstream "
+            "stage. This is expected: the API dates each status by when it "
+            "occurred, so a month can realize applications submitted earlier. "
+            "Aggregate monotonicity is checked separately and is authoritative."
         )
 
     # 4. Month coverage.

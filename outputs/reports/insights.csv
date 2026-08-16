@@ -1,15 +1,15 @@
 category,headline,detail,kind
-Forecast,"Dec 2026 is predicted to have the highest activity, at 1,989 applications.","That is 10.7% of the forecast year's total, with a 95% prediction interval of 1,051 to 2,488.",positive
-Forecast,"3 high-activity month(s) predicted: May 2026, Jun 2026 and Dec 2026.","These months carry 30% of forecast annual volume. Matching capacity, partner supply and reviewer bandwidth should be staged ahead of them.",positive
-Forecast,"Total 2026 applications are forecast at 18,655, 2.3% above 2025.","2025 closed at 18,229. The forecast averages 1,555 applications per month.",positive
-Forecast,"Lowest predicted activity falls in Feb 2026, Mar 2026.","These are the natural windows for member training, partner development and process work, since delivery pressure is at its lowest.",neutral
-Growth,Application volume increased by 6.1% in 2025 compared with 2024.,"2025 recorded 18,229 applications against 17,183 the year before, an average of 1,519 per month.",positive
-Growth,Exchange activity grew at a compound annual rate of 22.8% between 2022 and 2025.,"Total applications rose 85% over 3 years, from 9,854 to 18,229.",positive
-Seasonality,Peak season runs from Nov to Jan.,3 consecutive months sit at or above the annual average. Dec is the single strongest month at 1.33x the average.,neutral
-Seasonality,"Feb is the quietest month, running at 0.75x the annual average.",Dec carries 1.8x the volume of Feb. Recruitment and matching capacity should be planned around this swing rather than a flat monthly assumption.,neutral
-Funnel,"The biggest drop-off is APP to ACH, losing 56% of candidates.","33,579 of 60,302 applied candidates do not reach achieved / matched. This transition is the highest-leverage place to intervene.",negative
-Funnel,19.4% of applications convert all the way to a realization.,"11,710 realizations from 60,302 applications. Roughly 5 applications are needed per realization, which is the ratio to plan recruitment targets against.",neutral
-Entities,The top 5 Local Committees generate 49% of all applications.,"AIESEC in Delhi IIT leads with 10,611 applications (17.6% of the MC) across 20 entities.",neutral
-Entities,AIESEC in Bangalore is the fastest-growing large LC at +100.4% (2022->2025).,It now contributes 5.1% of MC applications with an application-to-realization rate of 18.6%.,positive
-Products,oGV is the largest programme at 51% of all applications.,"oGV peaks in Dec. oGTa converts best, with 27.8% of applications reaching realization versus 18.1% for oGV.",neutral
-Model,The selected model (ridge) achieves 93.6% accuracy in walk-forward validation (MAPE 6.4%).,"Mean absolute error is 92 applications per month across 24 out-of-sample origins. That is strong for operational planning; treat the prediction interval, not the point estimate, as the planning range.",positive
+Forecast,"Mar 2026 is predicted to have the highest activity, at 2,166 applications.","That is 10.3% of the forecast year's total, with a 95% prediction interval of 1,511 to 2,981.",positive
+Forecast,"3 high-activity month(s) predicted: Mar 2026, Apr 2026 and May 2026.","These months carry 30% of forecast annual volume. Matching capacity, partner supply and reviewer bandwidth should be staged ahead of them.",positive
+Forecast,"Total 2026 applications are forecast at 21,112, 9.8% above 2025.","2025 closed at 19,229. The forecast averages 1,759 applications per month.",positive
+Forecast,"Lowest predicted activity falls in Jan 2026, Feb 2026.","These are the natural windows for member training, partner development and process work, since delivery pressure is at its lowest.",neutral
+Growth,Application volume increased by 9.0% in 2025 compared with 2024.,"2025 recorded 19,229 applications against 17,639 the year before, an average of 1,602 per month.",positive
+Growth,Exchange activity grew at a compound annual rate of 11.5% between 2022 and 2025.,"Total applications rose 39% over 3 years, from 13,874 to 19,229.",positive
+Seasonality,Peak season runs from Mar to May.,3 consecutive months sit at or above the annual average. Mar is the single strongest month at 1.29x the average.,neutral
+Seasonality,"Jan is the quietest month, running at 0.74x the annual average.",Mar carries 1.7x the volume of Jan. Recruitment and matching capacity should be planned around this swing rather than a flat monthly assumption.,neutral
+Funnel,"The biggest drop-off is APP to ACH, losing 85% of candidates.","56,217 of 66,253 applied candidates do not reach achieved / matched. This transition is the highest-leverage place to intervene.",negative
+Funnel,3.5% of applications convert all the way to a realization.,"2,344 realizations from 66,253 applications. Roughly 28 applications are needed per realization, which is the ratio to plan recruitment targets against.",neutral
+Entities,The top 5 Local Committees generate 43% of all applications.,"AIESEC in Chandigarh leads with 6,939 applications (10.5% of the MC) across 33 entities.",neutral
+Entities,AIESEC in M.A.H.E. is the fastest-growing large LC at +471.7% (2022->2025).,It now contributes 5.7% of MC applications with an application-to-realization rate of 4.4%.,positive
+Products,oGTa is the largest programme at 32% of all applications.,"oGTa peaks in Aug. iGV converts best, with 9.8% of applications reaching realization versus 0.5% for oGTa.",neutral
+Model,The selected model (holt_winters) achieves 87.1% accuracy in walk-forward validation (MAPE 12.9%).,"Mean absolute error is 198 applications per month across 24 out-of-sample origins. That is acceptable for operational planning; treat the prediction interval, not the point estimate, as the planning range.",neutral

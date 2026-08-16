@@ -1,17 +1,19 @@
 # AI-Powered Exchange Activity Prediction Platform
 ### AIESEC MC India — 2026 Forecast
 
-Forecasting **high-activity exchange months for 2026** from historical AIESEC MC India
-application data (01-01-2022 → 31-12-2025), with a reproducible ML pipeline, a 12-model
-comparison, and an interactive dashboard.
+Forecasting **high-activity exchange months for 2026** from **real AIESEC MC India
+operational data** (01-01-2022 → 31-12-2025, 66,253 applications pulled live from the
+AIESEC Analytics API), with a reproducible ML pipeline, a 12-model comparison, and an
+interactive dashboard.
 
 <p align="center">
   <img src="outputs/figures/07_forecast_2026.png" alt="2026 exchange application forecast" width="100%">
 </p>
 
 <p align="center">
-  <b>Predicted high-activity months for 2026: May · June · December</b><br>
-  <sub>Selected model: ridge regression · MAE 92.5 · MAPE 6.4% · 24 walk-forward origins</sub>
+  <b>Predicted high-activity months for 2026: March · April · May</b><br>
+  <sub>Selected model: Holt-Winters · MAE 198.0 · MAPE 12.9% · 24 walk-forward origins</sub><br>
+  <sub><b>Real data</b> · EXPA office 1585 · 48/48 monthly windows · 33 active LCs</sub>
 </p>
 
 <p align="center">
@@ -68,15 +70,16 @@ It also delivers the funnel, entity and product analysis needed to act on that a
 
 | | |
 |---|---|
-| **Data window** | 01-01-2022 → 31-12-2025 (48 months) |
-| **Grain** | month × Local Committee × programme — 5,760 rows |
+| **Data source** | **Real** AIESEC Analytics API — office 1585, 48/48 windows |
+| **Data window** | 01-01-2022 → 31-12-2025 (48 months, 66,253 applications) |
+| **Grain** | month × Local Committee × programme — 4,690 non-empty cells |
 | **Funnel modelled** | `APP → ACH → ACC → APD → RE → FI → CO` |
 | **Features engineered** | 40, across time / historical / operational families |
 | **Models compared** | 12, across 4 tiers |
 | **Validation** | rolling-origin walk-forward, 24 out-of-sample origins |
-| **Selected model** | ridge regression — MAE **92.5**, MAPE **6.4%** |
+| **Selected model** | Holt-Winters — MAE **198.0**, MAPE **12.9%** |
 | **Deliverable** | [`outputs/predictions_2026.csv`](outputs/predictions_2026.csv) |
-| **Tests** | 49, all passing |
+| **Tests** | 56, all passing |
 
 ---
 
@@ -84,7 +87,7 @@ It also delivers the funnel, entity and product analysis needed to act on that a
 
 Planning today is **reactive**. Without a forecast, an MC must either:
 
-1. **Staff for the average** — and be overwhelmed in December, idle in February; or
+1. **Staff for the average** — and be overwhelmed in March, idle in January; or
 2. **Staff for the peak** — and carry expensive slack for eight months a year.
 
 Both waste the scarcest resource in a volunteer organisation: **member time**.
@@ -123,86 +126,142 @@ python run_pipeline.py --step all
 
 ## Data provenance (read this)
 
-**Every number in this repository was produced from a simulated reference dataset, not
-from real AIESEC data.** This section explains exactly why, and exactly how to change it.
+**Every number in this repository is real AIESEC operational data**, pulled from the live
+AIESEC Analytics API for **AIESEC in India (EXPA office `1585`)** over
+**2022-01-01 → 2025-12-31**.
 
-### Why
+| | |
+|---|---|
+| Source | `GET https://analytics.api.aiesec.org/v2/applications/analyze.json` |
+| Filter namespace | `performance_v3[office_id]=1585` |
+| Window | 48 monthly pulls, 2022-01 → 2025-12, **48/48 succeeded** |
+| Scale | 66,253 applications · 2,344 realizations · 33 active LCs · 3 products |
+| Flag | `is_reference_data: false` in `data/raw/api_responses.json` |
 
-The AIESEC Analytics API requires a valid GIS `access_token` bound to a real AIESEC
-account. I did not have credentials. I verified this directly against the live endpoint:
+The dashboard sidebar reports the source as **"AIESEC Analytics API"**, and the pipeline
+emits no simulated-data warning.
 
-```bash
-# No token supplied
-$ curl -s -w "HTTP %{http_code}\n" \
-  "https://analytics.api.aiesec.org/v2/applications/analyze.json?start_date=2025-01-01&end_date=2025-01-31"
-HTTP 402
-{"error":"Unauthorized"}
+### How the real response is shaped
 
-# Invalid token supplied
-$ curl -s -w "HTTP %{http_code}\n" \
-  "https://analytics.api.aiesec.org/v2/applications/analyze.json?access_token=invalid&start_date=2025-01-01&end_date=2025-01-31"
-HTTP 401
-{"status":{"code":401,"sub_code":"invalid_token","message":"Invalid, missing or expired token"}}
+The live endpoint does **not** return the nested `{"buckets": [...]}` tree that the older
+`performance` namespace produced. `performance_v3` returns a **flat** aggregation:
+
+```jsonc
+{"response": {
+  "1449": {                              // child office (LC) id
+    "applied_total":   {"doc_count": 6939, "applicants": {"value": 3839}},
+    "i_applied_7":     {"doc_count": 1204, "applicants": {"value":  812}},
+    "i_matched_7":     {"doc_count":  118, "applicants": {"value":  110}},
+    "o_realized_8":    {"doc_count":   12, "applicants": {"value":   12}}
+    // ... <direction>_<status>_<programme_id> for every combination
+  },
+  "1393": { /* ... */ },
+  "applied_total": {"doc_count": 66253}   // MC-level repeat of every metric
+}}
 ```
 
-The endpoint is **live and reachable**, and the client implemented here speaks its
-protocol correctly. It simply needs a token.
+Two properties of this shape drive the parser (`src/preprocessing/cleaning.py`):
 
-### What the repository therefore contains
+1. **The MC-level keys are the sum of the per-office nodes.** Parsing both would exactly
+   double every count, so `parse_v3_payload` reads *only* the numeric office keys.
+2. **`doc_count` is used, never `applicants.value`.** `applicants` is an Elasticsearch
+   *cardinality* aggregation (distinct people) and is **not additive**: someone who applies
+   in January and again in February counts once in a yearly window but twice across two
+   monthly windows. `doc_count` counts application records and sums cleanly.
 
-| Path | Status |
+Property 2 is verified, not assumed — the 48 monthly pulls reconcile to the single
+four-year aggregate with **zero delta on every stage**:
+
+| metric | Σ 48 monthly windows | one 4-year query | delta |
+|---|---:|---:|---:|
+| `applied_total` | 66,253 | 66,253 | **0** |
+| `matched_total` | 10,036 | 10,036 | **0** |
+| `an_accepted_total` | 6,617 | 6,617 | **0** |
+| `approved_total` | 3,160 | 3,160 | **0** |
+| `realized_total` | 2,344 | 2,344 | **0** |
+| `finished_total` | 2,253 | 2,253 | **0** |
+| `completed_total` | 1,381 | 1,381 | **0** |
+
+### Why per-row funnel monotonicity does not hold (and must not be enforced)
+
+The API counts each status in the window in which **that status occurred**, not in the
+window the application was created. An application submitted in March and realized in
+August contributes `APP` to March and `RE` to August. A quiet intake month that finally
+realizes an older cohort therefore legitimately shows `RE > APP`.
+
+This is real-data behaviour that the seeded simulation could never produce, because it
+drew each stage as a Binomial *from the same row*. Validation was corrected accordingly:
+
+* **Error** — the funnel must be monotonic **in aggregate** over the full window, where
+  every cohort's stages fall inside the window. It is: 66,253 → 10,036 → 6,617 → 3,160 →
+  2,344 → 2,253 → 1,381.
+* **Warning** — per-row inversions (1,525 of 4,690 rows) are reported and explained, not
+  treated as corruption.
+
+### Identifiers, verified rather than assumed
+
+| Thing | How it was verified |
 |---|---|
-| **Live API collection** — `src/api/aiesec_api.py` | Fully implemented: auth, retry, backoff, `Retry-After`, pagination, per-window failure isolation, token redaction. Never exercised against real credentials. |
-| **Offline reference dataset** — `src/api/reference_data.py` | Deterministic (seed 42). Emits the **same nested aggregation JSON shape** as the API, so the parser and every downstream stage are exercised identically on both paths. **This produced all published figures.** |
+| Office `1585` = AIESEC in India | `gis-api.aiesec.org/v2/committees/1585.json` → `{"full_name":"AIESEC in India","tag":"MC"}` |
+| LC names | `gis-api.aiesec.org/v2/committees/{id}.json`, one call per office, cached to `data/raw/committees.json` (40/40 resolved) |
+| Programme ids | `gis-api.aiesec.org/v2/programmes.json` → **7 = GV, 8 = GTa, 9 = GTe** |
 
-### What the reference data is, honestly
+> **Correction:** the original config mapped `5 → GTe` and `7 → GE`. Both were wrong. The
+> official endpoint gives `5 = GE`, `7 = GV`, `8 = GTa`, `9 = GTe`. Ids 1/2/5 are retired
+> and return zero across all 48 windows; they are dropped during parsing.
 
-It is a **seeded statistical simulation**, not real operational data. Monthly applications
-per (LC, product, direction) are drawn from a Poisson whose rate is the product of
-documented factors — LC size (Zipf-like), product mix, direction split, a post-COVID
-recovery trend, and Indian academic-calendar seasonality. Downstream funnel stages are
-drawn as Binomials from stage-to-stage conversion rates, which is why the funnel is
-monotonically non-increasing by construction. Every parameter is a named constant in
-`src/api/reference_data.py`.
+### The offline simulator is still present, but disabled
 
-**It makes no claim whatsoever about AIESEC in India's actual performance.** Its purpose
-is to prove the pipeline is correct, complete and end-to-end runnable by any reviewer
-without credentials.
+`src/api/reference_data.py` remains in the tree and `reference_data.enabled` is now
+`false`. It exists only so a reviewer without credentials can still run the pipeline
+(`python run_pipeline.py --step all --use-reference-data`). **Nothing in the committed
+artefacts is derived from it.** When it is used, `is_reference_data: true` propagates to
+the raw envelope, the pipeline logs and the dashboard sidebar.
 
-The flag propagates automatically — `is_reference_data: true` in
-`data/raw/api_responses.json`, a warning in the pipeline logs, and a "Data source" line in
-the dashboard sidebar.
+### Credentials
 
-### Switching to real data — no code changes
+The access token is read from `AIESEC_ACCESS_TOKEN` in `.env`, which is git-ignored and
+never committed. It is redacted from every log line and exception message
+(`redact_token`). GIS tokens are short-lived — if collection returns HTTP 401, refresh the
+token and re-run `--step collect`.
+
+### Reproducing the pull
 
 ```bash
 # .env  (git-ignored; copy from .env.example)
 AIESEC_ACCESS_TOKEN=<your GIS token>
-AIESEC_OFFICE_ID=<EXPA office id for AIESEC in India>
+AIESEC_OFFICE_ID=1585
 ```
 
 ```bash
 python run_pipeline.py --step all
 ```
 
-The pipeline detects the token, collects live data, and every downstream artefact flips
-from reference to live automatically. See
-**[`docs/API_INTEGRATION.md`](docs/API_INTEGRATION.md)** for the full go-live checklist,
+The pipeline detects the token and re-collects all 48 windows. Every raw payload is
+persisted to `data/raw/api_responses.json` first, so parsing, modelling and figures can be
+rebuilt afterwards with no further network access:
+
+```bash
+python run_pipeline.py --step process   # ... features, train, figures
+```
+
+See **[`docs/API_INTEGRATION.md`](docs/API_INTEGRATION.md)** for the go-live checklist,
 including how to confirm the office filter actually applied before trusting a backfill.
 
-### Two values I could not verify
+### Configuration that was previously unverified — now confirmed
 
-These are **configuration, not assumptions compiled into code** — set them once and
-nothing else changes:
+All three values that the earlier version of this project flagged as unverified have been
+resolved against live AIESEC endpoints, and `config/config.yaml` now carries
+`verified: true`:
 
-| Unknown | Config key | Env override | Current default |
-|---|---|---|---|
-| MC India EXPA office id | `api.office_id` | `AIESEC_OFFICE_ID` | `null` — required for a live pull |
-| Programme id → product | `products.mapping` | — | `1:GV, 2:GTa, 5:GTe, 7:GE` |
-| Filter namespace | `api.filter_namespace` | — | `performance` |
+| Value | Config key | Was | Now | Verified against |
+|---|---|---|---|---|
+| MC India EXPA office id | `api.office_id` | `null` | `1585` | `/v2/committees/1585.json` |
+| Filter namespace | `api.filter_namespace` | `performance` | `performance_v3` | live 200 vs empty aggregation |
+| Programme id → product | `products.mapping` | `1:GV, 2:GTa, 5:GTe, 7:GE` | `5:GE, 7:GV, 8:GTa, 9:GTe` | `/v2/programmes.json` |
 
-Both carry `verified: false` flags in `config/config.yaml` until confirmed against the
-GID documentation.
+The old programme mapping was **wrong in two places** and would have mislabelled every
+product in the output had the pipeline been pointed at real data unchanged.
 
 ---
 
@@ -227,7 +286,7 @@ GID documentation.
    │ PHASE 2 · PARSE + VALIDATE      src/preprocessing/cleaning.py      │
    │   tolerant recursive walk of ES-style buckets → tidy panel         │
    │   validate: monotonic funnel · no gaps · no negatives · no dupes   │
-   │   → data/processed/exchange_data.csv        (5,760 rows)           │
+   │   → data/processed/exchange_data.csv        (4,690 rows)           │
    └────────────────────────────────┬───────────────────────────────────┘
                                     ▼
    ┌─────────────────────────────┐  ┌─────────────────────────────────┐
@@ -369,8 +428,8 @@ should not be lost to one transient 502.
 
 ### Step 2 — Processing and validation
 
-Output schema — **`data/processed/exchange_data.csv`** (5,760 rows = 48 months × 20 LCs ×
-6 programmes):
+Output schema — **`data/processed/exchange_data.csv`** (4,690 rows: the 48 months × 33
+active LCs × 6 programmes grid, with all-zero cells dropped):
 
 | Column | Description |
 |---|---|
@@ -542,42 +601,54 @@ CSV; everything else is additive.
 
 | # | Model | Family | MAE ↓ | RMSE | MAPE | Error σ | Max error |
 |---|---|---|---:|---:|---:|---:|---:|
-| **1** | **ridge** (selected) | linear | **92.5** | **116.3** | **6.43%** | **70.6** | 356.7 |
-| 2 | holt_winters | time series | 101.4 | 138.3 | 7.30% | 94.0 | 314.4 |
-| 3 | random_forest | ensemble | 116.9 | 148.2 | 8.00% | 91.1 | 385.5 |
-| 4 | linear_regression | linear | 123.8 | 152.1 | 8.58% | 88.4 | 331.7 |
-| 5 | xgboost | ensemble | 124.4 | 160.2 | 8.67% | 101.0 | 407.6 |
-| 6 | gradient_boosting | ensemble | 126.2 | 156.2 | 8.92% | 92.0 | 379.5 |
-| 7 | seasonal_naive_drift | baseline | 128.4 | 170.4 | 9.18% | 112.0 | 360.2 |
-| 8 | seasonal_naive | baseline | 135.7 | 157.0 | 9.25% | 79.0 | 269.0 |
-| 9 | sarima | time series | 160.3 | 307.0 | 11.70% | 261.8 | 1213.4 |
-| 10 | moving_average_6 | baseline | 188.9 | 236.2 | 12.62% | 141.8 | 540.8 |
-| 11 | naive_last | baseline | 215.2 | 263.2 | 14.68% | 151.5 | 538.0 |
-| 12 | moving_average_3 | baseline | 265.0 | 320.1 | 18.16% | 179.5 | 589.7 |
+| **1** | **holt_winters** (selected) | time series | **198.0** | **241.2** | **12.88%** | **137.6** | **538.7** |
+| 2 | xgboost | ensemble | 210.3 | 288.9 | 12.58% | 198.2 | 708.5 |
+| 3 | seasonal_naive_drift | baseline | 211.9 | 277.7 | 13.04% | 179.5 | 747.4 |
+| 4 | random_forest | ensemble | 216.2 | 304.8 | 12.58% | 214.9 | 697.4 |
+| 5 | gradient_boosting | ensemble | 226.0 | 307.3 | 13.56% | 208.2 | 736.8 |
+| 6 | seasonal_naive | baseline | 237.9 | 294.1 | 14.94% | 172.9 | 773.0 |
+| 7 | ridge | linear | 239.9 | 334.4 | 15.69% | 232.9 | 822.6 |
+| 8 | naive_last | baseline | 283.2 | 372.4 | 17.57% | 241.9 | 832.0 |
+| 9 | sarima | time series | 288.4 | 407.9 | 18.28% | 288.5 | 1231.4 |
+| 10 | moving_average_6 | baseline | 301.3 | 389.4 | 18.68% | 246.8 | 956.2 |
+| 11 | moving_average_3 | baseline | 325.3 | 426.3 | 20.86% | 275.5 | 1015.0 |
+| 12 | linear_regression | linear | 360.4 | 520.1 | 25.27% | 375.0 | 1236.3 |
 
 ![Model comparison](outputs/figures/09_model_comparison.png)
 
-**Selected: ridge regression** — MAE 92.5 (≈93.6% accuracy), the only model inside the 5%
-tolerance band, and simultaneously the most stable (lowest error σ at 70.6). No tie-break
-was needed.
+**Selected: Holt-Winters** — MAE 198.0 (MAPE 12.88%, ≈87% accuracy), the only model inside
+the 5% tolerance band, and simultaneously the most stable (lowest error σ at 137.6) and
+the least biased (−2.8 against XGBoost's +130.2). No tie-break was needed.
 
 #### The finding worth stating plainly
 
-**Every tree ensemble lost to a penalised linear model.** With 36 usable training rows
-against 40 features, **regularisation beats capacity**. XGBoost placed 5th — behind plain
-Holt-Winters and barely ahead of gradient boosting.
+**A trivial baseline is statistically indistinguishable from XGBoost.**
+`seasonal_naive_drift` — "last year's same month, scaled by YoY growth", a one-line rule —
+lands at MAE 211.9 against XGBoost's 210.3. That is a **0.8% gap** over 24 origins. Three
+gradient-boosted / bagged ensembles, tuned across 40 features, bought essentially nothing
+over arithmetic a volunteer could do by hand.
 
-This is exactly why the brief's *"do not immediately jump to deep learning"* instruction
-is correct, and why this suite spans four tiers instead of assuming the most sophisticated
-model wins. The backtest **proved** it rather than asserting it.
+Meanwhile the model that won is a 1960s exponential-smoothing method with three
+parameters, and **plain linear regression finished dead last** — worse than every naive
+baseline, at more than double the winner's error.
+
+This is the brief's *"do not immediately jump to deep learning"* instruction vindicated on
+real data rather than asserted. It also **reverses the result from the earlier synthetic
+run**, where ridge won at MAE 92.5 and the ensembles clustered behind it. That inversion is
+itself the lesson: the simulation's smooth, well-behaved noise flattered regularised linear
+models, and real operational data — with its lumpy campaign-driven spikes — does not
+behave that way. Conclusions drawn from simulated data did not survive contact with the
+real series.
 
 Two secondary observations:
 
-- **SARIMA is unstable, not just inaccurate.** Its error σ of 262 against ridge's 71, and
-  a worst-case error of 1,213, show it occasionally diverges badly on short history. Mean
-  error alone would have hidden that.
-- **Moving averages rank last** — below even naive-last. On a strongly seasonal series,
+- **SARIMA is unstable, not just inaccurate.** Error σ of 289 and a worst case of 1,231
+  show it diverging badly on short history. Mean error alone would have hidden that.
+- **Moving averages rank near the bottom.** On a series with a 1.7× seasonal swing,
   smoothing destroys the signal that matters.
+- **Accuracy is materially worse than on synthetic data** (MAPE 12.9% vs 6.4%). Real
+  monthly applications are genuinely harder to predict, and the wider intervals downstream
+  are the honest consequence.
 
 ### Walk-forward fit of the selected model
 
@@ -589,15 +660,24 @@ Two secondary observations:
 
 | Year | Total applications | Avg/month | Peak month | Realizations | APP→RE | YoY growth |
 |---|---:|---:|---|---:|---:|---:|
-| 2022 | 9,854 | 821 | Dec | 1,715 | 17.40% | — |
-| 2023 | 15,036 | 1,253 | Dec | 2,742 | 18.24% | **+52.6%** |
-| 2024 | 17,183 | 1,432 | Dec | 3,394 | 19.75% | +14.3% |
-| 2025 | 18,229 | 1,519 | Dec | 3,859 | 21.17% | +6.1% |
+| 2022 | 13,874 | 1,156 | May | 366 | 2.64% | — |
+| 2023 | 15,511 | 1,293 | Mar | 664 | **4.28%** | +11.8% |
+| 2024 | 17,639 | 1,470 | Mar | 691 | 3.92% | **+13.7%** |
+| 2025 | 19,229 | 1,602 | Apr | 623 | 3.24% | +9.0% |
 
-**CAGR 2022 → 2025: +22.8%.** Growth is decelerating — 52.6% → 14.3% → 6.1% — the shape of
-a post-COVID recovery normalising rather than compounding. Note that **funnel efficiency
-improved every year** (17.4% → 21.2%): the MC is not just growing, it is converting
-better.
+**CAGR 2022 → 2025: +11.5%.** Applications have grown steadily and without the
+decelerating shape the simulation predicted — 11.8% → 13.7% → 9.0% is roughly flat
+double-digit growth.
+
+**The important finding is the divergence between the two columns.** Applications rose
+**+38.6%** from 2022 to 2025, but realizations **peaked in 2024 (691) and fell to 623 in
+2025**. Conversion efficiency peaked in 2023 at 4.28% and has declined for two consecutive
+years to 3.24%.
+
+> The MC is recruiting more people every year and converting a smaller share of them.
+> Volume growth is masking a conversion problem, and a headline "+9% applications" reads
+> as success while realizations move the other way. This is the single most important
+> thing in this dataset, and it is invisible unless the funnel is tracked alongside intake.
 
 ### Seasonality
 
@@ -605,25 +685,32 @@ better.
 
 | Month | Avg applications | Seasonal index | Season |
 |---|---:|---:|---|
-| Jan | 1,316 | 1.05 | Medium |
-| **Feb** | **945** | **0.75** | **Low** |
-| Mar | 1,046 | 0.83 | Low |
-| Apr | 1,127 | 0.90 | Medium |
-| **May** | **1,452** | **1.16** | **High** |
-| **Jun** | **1,501** | **1.20** | **High** |
-| Jul | 1,247 | 0.99 | Medium |
-| Aug | 1,096 | 0.87 | Low |
-| Sep | 1,137 | 0.91 | Medium |
-| Oct | 1,205 | 0.96 | Medium |
-| Nov | 1,331 | 1.06 | Medium |
-| **Dec** | **1,675** | **1.33** | **High** |
+| **Jan** | **1,024** | **0.74** | **Low** |
+| **Feb** | **1,031** | **0.75** | **Low** |
+| **Mar** | **1,787** | **1.29** | **High** |
+| **Apr** | **1,718** | **1.25** | **High** |
+| **May** | **1,706** | **1.24** | **High** |
+| Jun | 1,313 | 0.95 | Medium |
+| Jul | 1,205 | 0.87 | Medium |
+| Aug | 1,435 | 1.04 | Medium |
+| Sep | 1,344 | 0.97 | Medium |
+| Oct | 1,362 | 0.99 | Medium |
+| Nov | 1,485 | 1.08 | Medium |
+| **Dec** | **1,154** | **0.84** | **Low** |
 
-- **Peak season runs November → January**, with a second summer peak in **May–June** —
-  both aligned to Indian university breaks.
-- **December is 1.33× the annual average; February is 0.75×** — a **1.8× trough-to-peak
-  swing** that flat capacity planning cannot absorb.
-- December has been the peak month in **all four years**, which is why the seasonal signal
-  is learnable from only four cycles.
+- **Peak season is a single tight block: March → May** (index 1.29 / 1.25 / 1.24), aligned
+  to the Indian even-semester recruitment drive before summer exchange.
+- **The trough is January–February** (0.74–0.75), immediately before the peak — the MC goes
+  from its quietest month to its busiest in the space of four weeks.
+- **1.74× trough-to-peak swing** (Mar 1.294 ÷ Jan 0.742) that flat capacity planning cannot
+  absorb.
+- The peak month has been **March or April in three of four years** (May in 2022, the
+  COVID-recovery year), which is why the seasonal signal is learnable from four cycles.
+
+> The simulated data put the peak in **December** and the trough in **February**. The real
+> peak is **March–May** and the real trough is **December–February**. Any capacity plan
+> built on the synthetic seasonality would have staffed the busiest quarter as if it were
+> the quietest.
 
 ### The exchange funnel
 
@@ -631,21 +718,29 @@ better.
 
 | Stage | Label | Count | From previous | From APP | Dropped |
 |---|---|---:|---:|---:|---:|
-| APP | Applied | 60,302 | 100.0% | 100.0% | — |
-| ACH | Achieved / Matched | 26,723 | **44.3%** | 44.3% | **33,579** (largest leak) |
-| ACC | Accepted | 18,607 | 69.6% | 30.9% | 8,116 |
-| APD | Approved | 15,267 | 82.1% | 25.3% | 3,340 |
-| RE | Realized | 11,710 | 76.7% | 19.4% | 3,557 |
-| FI | Finished | 11,109 | 94.9% | 18.4% | 601 |
-| CO | Completed | 10,236 | 92.1% | 17.0% | 873 |
+| APP | Applied | 66,253 | 100.0% | 100.0% | — |
+| ACH | Achieved / Matched | 10,036 | **15.15%** | 15.15% | **56,217** (largest leak) |
+| ACC | Accepted | 6,617 | 65.93% | 9.99% | 3,419 |
+| APD | Approved | 3,160 | 47.76% | 4.77% | 3,457 |
+| RE | Realized | 2,344 | 74.18% | 3.54% | 816 |
+| FI | Finished | 2,253 | 96.12% | 3.40% | 91 |
+| CO | Completed | 1,381 | 61.30% | 2.08% | 872 |
 
-**The largest leak is APP → ACH: 33,579 of 60,302 applications (55.7%) never reach
-matching.** Every downstream stage converts far better (ACC→APD 82%, RE→FI 95%). A few
-points recovered at this one transition compound through the entire funnel — it is worth
-more than a uniform improvement everywhere else.
+**The largest leak is APP → ACH: 56,217 of 66,253 applications (84.9%) never reach
+matching.** Only about **1 application in 7** is ever matched to an opportunity.
 
-**End-to-end efficiency is 19.4% APP→RE** — roughly **5 applications per realization**,
+The second leak is **ACC → APD at 47.8%** — over half of everyone who is *accepted* is
+never *approved*. These two transitions together account for 59,674 of the 64,872 total
+drop-outs.
+
+**End-to-end efficiency is 3.54% APP→RE** — roughly **28 applications per realization**,
 which is the planning ratio for recruitment targets.
+
+> The simulated data reported 19.4% end-to-end and a 44.3% APP→ACH rate — **5.5× more
+> efficient than reality**. A 2026 recruitment target sized on the synthetic ratio would
+> have under-provisioned intake by more than a factor of five. The real funnel is
+> top-heavy in a way the simulation, which drew each stage as a Binomial from a plausible
+> conversion rate, structurally could not reproduce.
 
 ### Entity (Local Committee) performance
 
@@ -653,41 +748,64 @@ which is the planning ratio for recruitment targets.
 
 | # | Local Committee | Applications | Realizations | MC share | APP→RE | Growth 22→25 |
 |---|---|---:|---:|---:|---:|---:|
-| 1 | AIESEC in Delhi IIT | 10,611 | 2,094 | 17.6% | 19.7% | +74.1% |
-| 2 | AIESEC in Delhi University | 6,125 | 1,152 | 10.2% | 18.8% | +95.2% |
-| 3 | AIESEC in Mumbai | 5,265 | 1,069 | 8.7% | **20.3%** | +81.5% |
-| 4 | AIESEC in Pune | 4,310 | 840 | 7.2% | 19.5% | +91.7% |
-| 5 | AIESEC in Chennai | 3,502 | 697 | 5.8% | 19.9% | +83.3% |
-| 6 | AIESEC in Bangalore | 3,099 | 575 | 5.1% | 18.6% | **+100.4%** |
-| 7 | AIESEC in Hyderabad | 3,071 | 577 | 5.1% | 18.8% | +71.1% |
-| 8 | AIESEC in Kolkata | 2,773 | 555 | 4.6% | 20.0% | +92.2% |
-| 9 | AIESEC in Lucknow | 2,234 | 381 | 3.7% | 17.1% | +100.0% |
-| 10 | AIESEC in Jaipur | 2,194 | 434 | 3.6% | 19.8% | +88.5% |
+| 1 | AIESEC in Chandigarh | 6,939 | 120 | 10.5% | 1.73% | +69.8% |
+| 2 | AIESEC in Mumbai | 6,603 | **332** | 10.0% | 5.03% | −17.4% |
+| 3 | AIESEC in Delhi IIT | 6,274 | 137 | 9.5% | 2.18% | −15.7% |
+| 4 | AIESEC in Hyderabad | 4,641 | 128 | 7.0% | 2.76% | **+237.1%** |
+| 5 | AIESEC in Delhi University | 4,316 | 68 | 6.5% | 1.58% | −25.1% |
+| 6 | AIESEC in Bengaluru | 4,046 | 79 | 6.1% | 1.95% | −2.5% |
+| 7 | AIESEC in Chennai | 3,808 | 111 | 5.8% | 2.91% | +54.1% |
+| 8 | AIESEC in Jaipur | 3,772 | **304** | 5.7% | **8.06%** | +86.1% |
+| 9 | AIESEC in M.A.H.E. | 3,769 | 166 | 5.7% | 4.40% | **+471.7%** |
+| 10 | AIESEC in Ahmedabad | 2,737 | 138 | 4.1% | 5.04% | +21.5% |
 
-- **The top 5 LCs generate 49.4% of all applications; the top 10 generate 71.6%** across
-  20 entities. National performance inherits the risk of a handful of LCs.
-- **Bangalore is the fastest-growing large LC** at +100.4%.
-- Conversion is remarkably uniform (17–20%), which says the funnel problem is
-  **systemic**, not a few underperforming entities — so fix the process, not the outliers.
+- **The top 5 LCs generate 43.4% of all applications; the top 10 generate 70.8%** across
+  33 active entities. National performance inherits the risk of a handful of LCs.
+- **Conversion is not uniform — it varies 5× across comparable LCs.** Jaipur converts
+  **8.06%** APP→RE; Chandigarh, on *more* applications, converts **1.73%**. Delhi
+  University sits at 1.58%.
+- **Rank by applications and rank by realizations are different orderings.** Chandigarh is
+  #1 on intake but **#8 on realizations**; Jaipur is #8 on intake but **#2 on
+  realizations** — from 46% fewer applications than Chandigarh it produces **2.5× more
+  realizations**.
+
+> This directly contradicts the conclusion drawn from the simulated data, which showed a
+> uniform 17–20% conversion band across all LCs and concluded the funnel problem was
+> "systemic, not a few underperforming entities — so fix the process, not the outliers."
+> The real spread is 1.6%–8.1%. **The highest-leverage action is the opposite of what the
+> synthetic analysis recommended**: find what Jaipur and Ahmedabad do at matching and
+> propagate it to the high-volume, low-conversion LCs.
 
 ### Programme performance
 
 ![Products](outputs/figures/06_product_mix.png)
 
-| Programme | Applications | Realizations | MC share | APP→RE | Peak month | Growth |
-|---|---:|---:|---:|---:|---|---:|
-| **oGV** | 30,879 | 5,591 | **51.2%** | 18.1% | Dec | +78.9% |
-| iGV | 10,693 | 1,480 | 17.7% | 13.8% | Jun | +93.1% |
-| **oGTa** | 10,477 | 2,913 | 17.4% | **27.8%** | Dec | **+97.2%** |
-| iGTa | 3,628 | 792 | 6.0% | 21.8% | Jun | +91.0% |
-| oGTe | 3,487 | 752 | 5.8% | 21.6% | Dec | +83.6% |
-| iGTe | 1,138 | 182 | 1.9% | 16.0% | Jul | +56.9% |
+| Programme | Applications | Realizations | Share of APP | Share of RE | APP→RE | Peak | Growth |
+|---|---:|---:|---:|---:|---:|---|---:|
+| **oGTa** | 21,502 | 109 | **32.5%** | **4.7%** | **0.51%** | Aug | +2.8% |
+| iGTa | 14,794 | 372 | 22.3% | 15.9% | 2.51% | Apr | **+279.4%** |
+| **iGV** | 10,313 | **1,011** | 15.6% | **43.1%** | **9.80%** | Mar | −21.8% |
+| **oGV** | 8,792 | **690** | 13.3% | **29.4%** | 7.85% | Mar | +17.1% |
+| iGTe | 7,671 | 156 | 11.6% | 6.7% | 2.03% | Apr | +42.8% |
+| oGTe | 3,181 | 6 | 4.8% | 0.3% | 0.19% | May | +153.1% |
 
-- **oGV dominates volume at 51%**, but **oGTa converts best at 27.8% APP→RE** versus oGV's
-  18.1% — a 1.5× efficiency gap. Shifting marginal effort toward Global Talent yields more
-  realizations per application.
-- **Outgoing and incoming peak in different months** — outgoing in December, incoming in
-  June/July. They are distinct operational cycles and should be resourced separately.
+**The single largest misallocation in the dataset:**
+
+- **oGTa absorbs 32.5% of all applications and produces 4.7% of all realizations** — a
+  0.51% conversion rate, meaning **197 applications per realization**. It is the largest
+  programme by intake and second-smallest by output.
+- **Global Volunteer is the engine.** iGV + oGV together are **28.8% of applications but
+  72.6% of realizations**, converting at 9.80% and 7.85% — roughly **19× oGTa's rate**.
+- **oGTe is effectively non-functional**: 3,181 applications produced **6** realizations
+  across four years.
+- Growth is pointed the wrong way: iGTa grew **+279%** and oGTe **+153%**, while **iGV, the
+  single most productive programme, shrank 21.8%**.
+
+> Reallocating even a fraction of oGTa's 21,502 applications toward GV at its observed
+> conversion rate would add more realizations than any plausible efficiency gain elsewhere.
+> The simulated data showed the reverse ordering entirely — oGV at 51% of volume and oGTa
+> as the *best* converter at 27.8% — and would have driven effort toward the programme that
+> in reality converts worst.
 
 ---
 
@@ -699,54 +817,54 @@ which is the planning ratio for recruitment targets.
 
 | Month | Predicted Applications | Activity Level |
 |---|---:|---|
-| Jan 2026 | 1,682 | Medium |
-| Feb 2026 | 1,175 | **Low** |
-| Mar 2026 | 1,330 | **Low** |
-| Apr 2026 | 1,437 | Medium |
-| May 2026 | 1,741 | **High** |
-| Jun 2026 | 1,814 | **High** |
-| Jul 2026 | 1,556 | Medium |
-| Aug 2026 | 1,386 | Medium |
-| Sep 2026 | 1,398 | Medium |
-| Oct 2026 | 1,541 | Medium |
-| Nov 2026 | 1,606 | Medium |
-| **Dec 2026** | **1,989** | **High** |
-| **Total** | **18,655** | |
+| Jan 2026 | 1,403 | **Low** |
+| Feb 2026 | 1,410 | **Low** |
+| **Mar 2026** | **2,166** | **High** |
+| **Apr 2026** | **2,097** | **High** |
+| **May 2026** | **2,085** | **High** |
+| Jun 2026 | 1,692 | Medium |
+| Jul 2026 | 1,584 | Medium |
+| Aug 2026 | 1,814 | Medium |
+| Sep 2026 | 1,723 | Medium |
+| Oct 2026 | 1,741 | Medium |
+| Nov 2026 | 1,864 | Medium |
+| Dec 2026 | 1,533 | Medium |
+| **Total** | **21,112** | |
 
 ### Full CSV, with all supporting columns
 
 | Month | Predicted | Level | 95% interval | Rank | % of year | vs history | within 2026 |
 |---|---:|---|---|---:|---:|---|---|
-| Jan 2026 | 1,682 | **Medium** | 1,411 – 1,826 | 4 | 9.02% | High | Medium |
-| Feb 2026 | 1,175 | **Low** | 792 – 1,379 | 12 | 6.30% | Medium | Low |
-| Mar 2026 | 1,330 | **Low** | 860 – 1,579 | 11 | 7.13% | Medium | Low |
-| Apr 2026 | 1,437 | **Medium** | 895 – 1,725 | 8 | 7.70% | Medium | Medium |
-| May 2026 | 1,741 | **High** | 1,135 – 2,063 | 3 | 9.33% | High | High |
-| Jun 2026 | 1,814 | **High** | 1,151 – 2,167 | 2 | 9.72% | High | High |
-| Jul 2026 | 1,556 | **Medium** | 839 – 1,936 | 6 | 8.34% | High | Medium |
-| Aug 2026 | 1,386 | **Medium** | 620 – 1,793 | 10 | 7.43% | Medium | Low |
-| Sep 2026 | 1,398 | **Medium** | 586 – 1,830 | 9 | 7.49% | Medium | Medium |
-| Oct 2026 | 1,541 | **Medium** | 685 – 1,997 | 7 | 8.26% | High | Medium |
-| Nov 2026 | 1,606 | **Medium** | 708 – 2,084 | 5 | 8.61% | High | Medium |
-| Dec 2026 | 1,989 | **High** | 1,051 – 2,488 | 1 | 10.66% | High | High |
+| Jan 2026 | 1,403 | **Low** | 1,024 – 1,873 | 12 | 6.65% | Medium | Low |
+| Feb 2026 | 1,410 | **Low** | 875 – 2,076 | 11 | 6.68% | Medium | Low |
+| Mar 2026 | 2,166 | **High** | 1,511 – 2,981 | 1 | 10.26% | High | High |
+| Apr 2026 | 2,097 | **High** | 1,340 – 3,038 | 2 | 9.93% | High | High |
+| May 2026 | 2,085 | **High** | 1,239 – 3,138 | 3 | 9.88% | High | High |
+| Jun 2026 | 1,692 | **Medium** | 766 – 2,845 | 8 | 8.01% | High | Medium |
+| Jul 2026 | 1,584 | **Medium** | 584 – 2,830 | 9 | 7.50% | High | Medium |
+| Aug 2026 | 1,814 | **Medium** | 744 – 3,145 | 5 | 8.59% | High | Medium |
+| Sep 2026 | 1,723 | **Medium** | 588 – 3,135 | 7 | 8.16% | High | Medium |
+| Oct 2026 | 1,741 | **Medium** | 545 – 3,230 | 6 | 8.25% | High | Medium |
+| Nov 2026 | 1,864 | **Medium** | 610 – 3,425 | 4 | 8.83% | High | Medium |
+| Dec 2026 | 1,533 | **Medium** | 223 – 3,164 | 10 | 7.26% | Medium | Low |
 
 <details>
 <summary><b>Raw CSV contents</b> (click to expand)</summary>
 
 ```csv
 Month,Predicted Applications,Activity Level,date,month_number,lower_95,upper_95,activity_level_vs_history,activity_level_within_2026,model,rank_in_year,share_of_year_pct
-Jan 2026,1682,Medium,2026-01-01,1,1411,1826,High,Medium,ridge,4,9.02
-Feb 2026,1175,Low,2026-02-01,2,792,1379,Medium,Low,ridge,12,6.3
-Mar 2026,1330,Low,2026-03-01,3,860,1579,Medium,Low,ridge,11,7.13
-Apr 2026,1437,Medium,2026-04-01,4,895,1725,Medium,Medium,ridge,8,7.7
-May 2026,1741,High,2026-05-01,5,1135,2063,High,High,ridge,3,9.33
-Jun 2026,1814,High,2026-06-01,6,1151,2167,High,High,ridge,2,9.72
-Jul 2026,1556,Medium,2026-07-01,7,839,1936,High,Medium,ridge,6,8.34
-Aug 2026,1386,Medium,2026-08-01,8,620,1793,Medium,Low,ridge,10,7.43
-Sep 2026,1398,Medium,2026-09-01,9,586,1830,Medium,Medium,ridge,9,7.49
-Oct 2026,1541,Medium,2026-10-01,10,685,1997,High,Medium,ridge,7,8.26
-Nov 2026,1606,Medium,2026-11-01,11,708,2084,High,Medium,ridge,5,8.61
-Dec 2026,1989,High,2026-12-01,12,1051,2488,High,High,ridge,1,10.66
+Jan 2026,1403,Low,2026-01-01,1,1024,1873,Medium,Low,holt_winters,12,6.65
+Feb 2026,1410,Low,2026-02-01,2,875,2076,Medium,Low,holt_winters,11,6.68
+Mar 2026,2166,High,2026-03-01,3,1511,2981,High,High,holt_winters,1,10.26
+Apr 2026,2097,High,2026-04-01,4,1340,3038,High,High,holt_winters,2,9.93
+May 2026,2085,High,2026-05-01,5,1239,3138,High,High,holt_winters,3,9.88
+Jun 2026,1692,Medium,2026-06-01,6,766,2845,High,Medium,holt_winters,8,8.01
+Jul 2026,1584,Medium,2026-07-01,7,584,2830,High,Medium,holt_winters,9,7.5
+Aug 2026,1814,Medium,2026-08-01,8,744,3145,High,Medium,holt_winters,5,8.59
+Sep 2026,1723,Medium,2026-09-01,9,588,3135,High,Medium,holt_winters,7,8.16
+Oct 2026,1741,Medium,2026-10-01,10,545,3230,High,Medium,holt_winters,6,8.25
+Nov 2026,1864,Medium,2026-11-01,11,610,3425,High,Medium,holt_winters,4,8.83
+Dec 2026,1533,Medium,2026-12-01,12,223,3164,Medium,Low,holt_winters,10,7.26
 ```
 
 </details>
@@ -773,30 +891,39 @@ Dec 2026,1989,High,2026-12-01,12,1051,2488,High,High,ridge,1,10.66
 
 ### Key predictions
 
-> **Three high-activity months: May, June and December 2026**, carrying **30% of forecast
+> **Three high-activity months: March, April and May 2026**, carrying **30.1% of forecast
 > annual volume** between them.
 
-- **December 2026 is the peak** at 1,989 applications — 10.7% of the year, and the fourth
-  consecutive year December leads.
-- **Total 2026 forecast: 18,655 applications, +2.3% on 2025** — continuing the growth
-  deceleration (52.6% → 14.3% → 6.1% → 2.3%).
-- **February and March are the quiet months** — the natural window for member training,
-  partner development and process work, when delivery pressure is lowest.
-- **Intervals widen materially by December** (1,051–2,488). That width is **honest, not a
-  defect**: a 12-step recursive forecast from 48 observations genuinely carries that much
-  uncertainty. Plan against the band, not the central line.
+- **March 2026 is the peak** at 2,166 applications — 10.3% of the year, consistent with
+  March/April leading in three of the last four years.
+- **Total 2026 forecast: 21,112 applications, +9.8% on 2025** — in line with the steady
+  9–14% band the MC has held since 2022.
+- **January and February are the quiet months** — the natural window for member training,
+  partner development and process work, immediately before the year's busiest quarter.
+- **Intervals widen materially by December** (223–3,164). That width is **honest, not a
+  defect**: a 12-step recursive forecast from 48 observations of a genuinely noisy real
+  series carries that much uncertainty. Plan against the band, not the central line.
 
 ### Recommended actions
 
-1. **Stage capacity one month *before* each peak.** Matching and reviewer bandwidth must
-   be in place by April and November — not during May and December.
-2. **Attack the APP → ACH leak first.** It loses 56% of all candidates. A few points
-   recovered there is worth more than a uniform improvement everywhere else.
-3. **Use February–March for capability, not idling.** Lowest delivery pressure of the year.
-4. **Shift marginal effort toward Global Talent.** oGTa converts at 27.8% versus oGV's
-   18.1% — more realizations per unit of recruitment effort.
-5. **Grow the mid-tier LCs.** The top 5 carry 49% of volume; that concentration is a
-   delivery risk, and conversion rates show mid-tier LCs are equally efficient.
+1. **Stage capacity in February, before the March–May block.** Matching and reviewer
+   bandwidth must be in place *by* February — the MC goes from its quietest month
+   (index 0.74) to its busiest (1.29) in four weeks.
+2. **Attack the APP → ACH leak first.** It loses **84.9%** of all candidates — 56,217 of
+   66,253. Nothing else in the funnel is close; a few points recovered here is worth more
+   than a uniform improvement everywhere else.
+3. **Fix the ACC → APD stage second.** 52% of *accepted* candidates are never approved,
+   which is an internal process loss, not a market one.
+4. **Rebalance away from oGTa.** It takes 32.5% of applications and returns 4.7% of
+   realizations (0.51%, ≈197 applications per realization). GV converts at 8–10%.
+5. **Reverse the iGV decline.** The single most productive programme (43% of all
+   realizations) shrank 21.8% over the period while the worst converters grew.
+6. **Propagate what Jaipur does.** Conversion ranges 1.6%–8.1% across comparable LCs;
+   Jaipur produces 2.5× Chandigarh's realizations from 46% fewer applications. This is a
+   transferable-practice problem, not a systemic one.
+7. **Track realizations, not applications, as the headline metric.** Applications grew
+   38.6% since 2022 while realizations fell from their 2024 peak — the current headline
+   hides the trend that matters.
 
 ---
 
@@ -833,18 +960,20 @@ walk-forward fit, feature importance).
 Findings generated directly from the data — **every number computed, none hand-written**:
 
 ```
-[Forecast]    Dec 2026 is predicted to have the highest activity, at 1,989 applications.
-[Forecast]    3 high-activity month(s) predicted: May 2026, Jun 2026 and Dec 2026.
-[Forecast]    Total 2026 applications are forecast at 18,655, 2.3% above 2025.
-[Growth]      Exchange activity grew at a compound annual rate of 22.8% between 2022 and 2025.
-[Seasonality] Peak season runs from Nov to Jan.
-[Seasonality] Feb is the quietest month, running at 0.75x the annual average.
-[Funnel]      The biggest drop-off is APP to ACH, losing 56% of candidates.
-[Funnel]      19.4% of applications convert all the way to a realization.
-[Entities]    The top 5 Local Committees generate 49% of all applications.
-[Entities]    AIESEC in Bangalore is the fastest-growing large LC at +100.4% (2022->2025).
-[Products]    oGV is the largest programme at 51% of all applications.
-[Model]       The selected model (ridge) achieves 93.6% accuracy (MAPE 6.4%).
+[Forecast]    Mar 2026 is predicted to have the highest activity, at 2,166 applications.
+[Forecast]    3 high-activity month(s) predicted: Mar 2026, Apr 2026 and May 2026.
+[Forecast]    Total 2026 applications are forecast at 21,112, 9.8% above 2025.
+[Forecast]    Lowest predicted activity falls in Jan 2026, Feb 2026.
+[Growth]      Application volume increased by 9.0% in 2025 compared with 2024.
+[Growth]      Exchange activity grew at a compound annual rate of 11.5% between 2022 and 2025.
+[Seasonality] Peak season runs from Mar to May.
+[Seasonality] Jan is the quietest month, running at 0.74x the annual average.
+[Funnel]      The biggest drop-off is APP to ACH, losing 85% of candidates.
+[Funnel]      3.5% of applications convert all the way to a realization.
+[Entities]    The top 5 Local Committees generate 43% of all applications.
+[Entities]    AIESEC in M.A.H.E. is the fastest-growing large LC at +471.7% (2022->2025).
+[Products]    oGTa is the largest programme at 32% of all applications.
+[Model]       The selected model (holt_winters) achieves 87.1% accuracy (MAPE 12.9%).
 ```
 
 ![Insights](docs/screenshots/06_insights.jpg)
@@ -951,12 +1080,13 @@ STEP 3/5  EXPLORATORY DATA ANALYSIS
 STEP 4/5  FEATURE ENGINEERING
 STEP 5/5  MODEL TRAINING, SELECTION AND FORECASTING
 ...
-Selected 'ridge' (MAE=92.49, 1 model(s) within 5% tolerance)
-2026 forecast: total=18655, peak=Dec 2026 (1989)
+Selected 'holt_winters' (MAE=198.02, 1 model(s) within 5% tolerance)
+2026 forecast: total=21112, peak=Mar 2026 (2166)
 PIPELINE COMPLETE
 ```
 
-Results are deterministic (seeded), so you should get **exactly** the numbers published
+Re-collection hits the live API, so totals will differ if AIESEC back-dates records; parsing
+and modelling from the saved payloads are deterministic and reproduce **exactly** the numbers published
 in this README. To wipe every generated artefact first and prove nothing is stale:
 
 ```bash
@@ -1160,7 +1290,7 @@ aiesec-exchange-prediction/
 ├── data/
 │   ├── raw/api_responses.json      ← raw payloads (git-ignored: 8 MB, regenerable)
 │   └── processed/
-│       ├── exchange_data.csv       ← the tidy panel — 5,760 rows
+│       ├── exchange_data.csv       ← the tidy panel — 4,690 rows
 │       ├── features.csv            ← feature matrix — 36 × 40
 │       └── monthly_applications.csv
 │
@@ -1211,7 +1341,7 @@ aiesec-exchange-prediction/
 | **Configuration** | `config/config.yaml` holds every path, threshold and hyper-parameter |
 | **No hardcoded paths** | All paths resolve through `Settings.paths`; nothing is hardcoded in source |
 | **No hardcoded secrets** | Tokens come only from the environment. `redact_token()` scrubs them from every logged URL and every exception message — asserted by tests |
-| **Reproducibility** | Seeded RNG, deterministic reference data, pinned dependency ranges, `make reset && make all` rebuilds every artefact from scratch |
+| **Reproducibility** | Every raw API payload persisted to `data/raw/api_responses.json`, seeded RNG, pinned dependency ranges, `make reset && make all` rebuilds every artefact from scratch |
 | **Graceful degradation** | Missing Prophet, missing XGBoost, missing credentials, missing artefacts — each is handled with a warning and a working fallback, never a crash |
 
 ### Security notes
@@ -1273,17 +1403,21 @@ tolerance band — which a test caught and now pins.
 
 Stated plainly, because a forecast without its caveats is a liability:
 
-1. **The numbers come from simulated data.** Everything above demonstrates a correct
-   pipeline; it is not a claim about AIESEC in India. See
-   [Data provenance](#data-provenance-read-this).
-2. **48 observations is a short series** — roughly 4 seasonal cycles. Intervals are wide by
-   December 2026 (1,051–2,488), and that width is honest rather than a defect.
+1. **48 observations is a short series** — exactly 4 seasonal cycles, the practical minimum
+   for estimating a 12-month seasonal pattern. Intervals are wide by December 2026
+   (223–3,164), and that width is honest rather than a defect.
+2. **The window opens in the COVID recovery.** January 2022 sits at the bottom of a
+   disrupted period, so the 11.5% CAGR measured 2022→2025 partly reflects rebound rather
+   than underlying growth, and the 2026 forecast inherits that.
 3. **Recursive forecasting compounds error.** Months 7–12 rest partly on predicted lags.
 4. **Operational features are frozen** at their trailing 12-month mean for future months —
    they cannot be observed ahead. Deliberately conservative.
 5. **No exogenous regressors.** Visa policy, partner supply, MC strategy and campaign
    calendars all move exchange activity, and none are modelled.
-6. **`office_id` and the programme mapping are unverified** against official documentation.
+6. **Status counts are period-scoped, not cohort-scoped.** The funnel conversion rates are
+   ratios of stage totals over the same window, not a tracked cohort. Because realizations
+   lag applications by months, the headline 3.54% APP→RE rate mixes cohorts and is a
+   steady-state approximation, not a true per-cohort conversion.
 7. **Prophet was not exercised** — not installed in this environment, so the suite skipped
    it with a warning. The integration exists and activates on `pip install prophet`.
 8. **MC-level forecast only.** Per-LC and per-programme forecasts are a natural next step

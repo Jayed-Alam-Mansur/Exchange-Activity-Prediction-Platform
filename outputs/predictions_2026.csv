@@ -1,13 +1,13 @@
 Month,Predicted Applications,Activity Level,date,month_number,lower_95,upper_95,activity_level_vs_history,activity_level_within_2026,model,rank_in_year,share_of_year_pct
-Jan 2026,1682,Medium,2026-01-01,1,1411,1826,High,Medium,ridge,4,9.02
-Feb 2026,1175,Low,2026-02-01,2,792,1379,Medium,Low,ridge,12,6.3
-Mar 2026,1330,Low,2026-03-01,3,860,1579,Medium,Low,ridge,11,7.13
-Apr 2026,1437,Medium,2026-04-01,4,895,1725,Medium,Medium,ridge,8,7.7
-May 2026,1741,High,2026-05-01,5,1135,2063,High,High,ridge,3,9.33
-Jun 2026,1814,High,2026-06-01,6,1151,2167,High,High,ridge,2,9.72
-Jul 2026,1556,Medium,2026-07-01,7,839,1936,High,Medium,ridge,6,8.34
-Aug 2026,1386,Medium,2026-08-01,8,620,1793,Medium,Low,ridge,10,7.43
-Sep 2026,1398,Medium,2026-09-01,9,586,1830,Medium,Medium,ridge,9,7.49
-Oct 2026,1541,Medium,2026-10-01,10,685,1997,High,Medium,ridge,7,8.26
-Nov 2026,1606,Medium,2026-11-01,11,708,2084,High,Medium,ridge,5,8.61
-Dec 2026,1989,High,2026-12-01,12,1051,2488,High,High,ridge,1,10.66
+Jan 2026,1403,Low,2026-01-01,1,1024,1873,Medium,Low,holt_winters,12,6.65
+Feb 2026,1410,Low,2026-02-01,2,875,2076,Medium,Low,holt_winters,11,6.68
+Mar 2026,2166,High,2026-03-01,3,1511,2981,High,High,holt_winters,1,10.26
+Apr 2026,2097,High,2026-04-01,4,1340,3038,High,High,holt_winters,2,9.93
+May 2026,2085,High,2026-05-01,5,1239,3138,High,High,holt_winters,3,9.88
+Jun 2026,1692,Medium,2026-06-01,6,766,2845,High,Medium,holt_winters,8,8.01
+Jul 2026,1584,Medium,2026-07-01,7,584,2830,High,Medium,holt_winters,9,7.5
+Aug 2026,1814,Medium,2026-08-01,8,744,3145,High,Medium,holt_winters,5,8.59
+Sep 2026,1723,Medium,2026-09-01,9,588,3135,High,Medium,holt_winters,7,8.16
+Oct 2026,1741,Medium,2026-10-01,10,545,3230,High,Medium,holt_winters,6,8.25
+Nov 2026,1864,Medium,2026-11-01,11,610,3425,High,Medium,holt_winters,4,8.83
+Dec 2026,1533,Medium,2026-12-01,12,223,3164,Medium,Low,holt_winters,10,7.26

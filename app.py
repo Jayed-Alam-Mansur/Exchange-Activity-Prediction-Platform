@@ -90,18 +90,28 @@ def load_everything() -> Dict[str, Any]:
     panel = pd.read_csv(panel_path, parse_dates=["date"])
     bundle["panel"] = panel
 
-    # --- provenance from the raw envelope ---
-    raw_path = settings.paths.raw_responses
-    if raw_path.exists():
-        try:
-            import json
+    # --- provenance ---
+    # Prefer the raw envelope; fall back to the committed provenance mirror so a
+    # deployed dashboard still reports the source (data/raw/ is git-ignored).
+    import json
 
-            with raw_path.open("r", encoding="utf-8") as handle:
-                metadata = json.load(handle).get("metadata", {})
+    raw_path = settings.paths.raw_responses
+    provenance_path = settings.paths.data_processed / "provenance.json"
+
+    for path, extract in (
+        (raw_path, lambda blob: blob.get("metadata", {})),
+        (provenance_path, lambda blob: blob),
+    ):
+        if not path.exists():
+            continue
+        try:
+            with path.open("r", encoding="utf-8") as handle:
+                metadata = extract(json.load(handle))
             bundle["metadata"] = metadata
             bundle["is_reference_data"] = bool(metadata.get("is_reference_data"))
+            break
         except Exception as exc:  # provenance is informational, never fatal
-            logger.debug("Could not read raw metadata: %s", exc)
+            logger.debug("Could not read provenance from %s: %s", path, exc)
 
     # --- analysis tables: read from disk, recompute if absent ---
     reports = settings.paths.reports_dir
